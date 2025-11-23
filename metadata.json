@@ -1,0 +1,8 @@
+{
+  "name": "Celeste - AI Astrology & Psychic Connection",
+  "description": "A mystical AI chatbot offering astrological insights with a freemium model and connection to real human astrologers.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
