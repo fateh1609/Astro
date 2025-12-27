@@ -8,10 +8,15 @@ export enum Sender {
 
 export enum MessageType {
   TEXT = 'text',
-  CALL_OFFER = 'call_offer', // Video/Voice call request
-  PAYMENT_REQUEST = 'payment_request', // Dakshina/Tip request
-  SYSTEM_NOTIF = 'system_notif'
+  CALL_OFFER = 'call_offer',
+  PAYMENT_REQUEST = 'payment_request',
+  SYSTEM_NOTIF = 'system_notif',
+  AUDIO = 'audio',
+  IMAGE = 'image',
+  VIDEO = 'video'
 }
+
+export type Language = 'en' | 'hi';
 
 export interface Product {
   id: string;
@@ -27,16 +32,20 @@ export interface Message {
   id: string;
   text: string;
   sender: Sender;
-  type?: MessageType; // Defaults to TEXT
+  type?: MessageType; 
   timestamp: Date;
   isGist?: boolean; 
   isLocked?: boolean;
   fullContent?: string;
-  astrologerId?: string; // If sent by a real astrologer
-  suggestedProducts?: Product[]; // For context-aware e-commerce suggestions
+  astrologerId?: string;
+  suggestedProducts?: Product[];
+  attachmentUrl?: string; // For Media
   metadata?: {
-    amount?: number; // For payment requests
-    callType?: 'voice' | 'video'; // For call offers
+    amount?: number;
+    callType?: 'voice' | 'video';
+    duration?: number; // For Audio
+    callStatus?: 'ended' | 'missed' | 'active'; // For Calls
+    durationText?: string; // Formatted duration for Calls
   };
 }
 
@@ -46,7 +55,7 @@ export interface Astrologer {
   specialty: string;
   rating: number;
   reviews: number;
-  pricePerMin: number; // In INR
+  pricePerMin: number;
   imageUrl: string;
   isOnline: boolean;
 }
@@ -73,18 +82,51 @@ export interface PayoutRecord {
   referenceId: string;
 }
 
+export interface Transaction {
+  id: string;
+  userId: string;
+  userName: string;
+  amount: number;
+  type: 'Product' | 'Subscription' | 'Dakshina' | 'Consultation';
+  status: 'Success' | 'Failed';
+  date: string;
+  details: string;
+}
+
+export interface CommunicationLog {
+  id: string;
+  type: 'email' | 'sms' | 'call_voice' | 'call_video' | 'system';
+  recipient: string; // Contact or User Name
+  direction: 'outbound' | 'inbound' | 'internal';
+  status: 'sent' | 'delivered' | 'failed' | 'completed' | 'missed' | 'logged';
+  timestamp: string;
+  details?: string; // e.g. "OTP Sent", "Duration: 5m"
+}
+
+export interface SubscriptionTier {
+  id: string;
+  name: string;
+  price: number;
+  duration: string; // 'Monthly' | 'One-Time' | 'Yearly'
+  benefits: string[]; // Display text
+  featureFlags: string[]; // System keys: ['daily_insight', 'chat_unlimited', 'call_access']
+}
+
 export interface UserState {
   dailyQuestionsLeft: number;
   isPremium: boolean;
   name: string;
   gender?: string;
-  zodiacSign?: string;
+  contact?: string;
   birthDate?: string;
   birthTime?: string;
   birthPlace?: string;
   hasOnboarded: boolean;
   connectedAstrologerId?: string;
   subscriptionExpiry?: Date;
+  language: Language; 
+  subscriptionTierId?: string;
+  isAdminImpersonating?: boolean; // New Flag for Admin Mode
 }
 
 export interface CallState {
@@ -92,6 +134,8 @@ export interface CallState {
   type: 'voice' | 'video';
   partnerName: string;
   partnerImage: string;
+  channelName?: string;
+  messageId?: string; // ID of the chat message that started the call
 }
 
 export enum AppView {
@@ -99,5 +143,20 @@ export enum AppView {
   MARKETPLACE = 'marketplace',
   SHOP = 'shop',
   PROFILE = 'profile',
-  ASTRO_DASHBOARD = 'astro_dashboard'
+  ASTRO_DASHBOARD = 'astro_dashboard',
+  ADMIN_DASHBOARD = 'admin_dashboard',
+  HOROSCOPE = 'horoscope'
+}
+
+export interface HoroscopeData {
+  daily: {
+    overview: string;
+    dos: string[];
+    donts: string[];
+    luckyColor: string;
+    luckyNumber: string;
+  };
+  weekly: string;
+  monthly: string;
+  starSign: string;
 }

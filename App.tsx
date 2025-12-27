@@ -1,1057 +1,469 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Sender, Message, UserState, AppView, Astrologer, MessageType, CallState, Product, Earnings } from './types';
-import { MOCK_ASTROLOGERS, INITIAL_DAILY_LIMIT, PREMIUM_DAILY_LIMIT, generateSystemInstruction, SUGGESTED_QUESTIONS, RAZORPAY_KEY_ID, MOCK_PRODUCTS } from './constants';
-import { initializeChat, sendMessageToGemini } from './services/geminiService';
+import { Sender, Message, UserState, AppView, Astrologer, MessageType, CallState, Product, Earnings, Transaction, HoroscopeData, Language } from './types';
+import { INITIAL_DAILY_LIMIT, PREMIUM_DAILY_LIMIT, generateSystemInstruction, SUGGESTED_QUESTIONS, TOPIC_QUESTIONS, RAZORPAY_KEY_ID, TRANSLATIONS, MOCK_PRODUCTS, MOCK_ASTROLOGERS, formatDisplayName } from './constants';
+import { initializeChat, sendMessageToGemini, generateJsonContent } from './services/geminiService';
+import { fetchProducts, fetchTransactions, saveTransaction, fetchUserProfile, saveUserProfile, seedDatabase, fetchAstrologers, subscribeToTable, logCommunication, generateUniqueUsername, generateReferenceId, fetchCachedReading, saveCachedReading } from './services/dbService';
+import { verifyPassword, generateJWT, verifyJWT } from './services/securityService';
 import StarBackground from './components/Layout/StarBackground';
 import MessageBubble from './components/Chat/MessageBubble';
+import ThinkingBubble from './components/Chat/ThinkingBubble';
 import AstroCard from './components/Marketplace/AstroCard';
 import AstrologerDashboard from './components/Astrologer/AstrologerDashboard';
 import CallInterface from './components/Call/CallInterface';
 import RatingModal from './components/Chat/RatingModal';
 import Shop from './components/Shop/Shop';
 import NatalChart from './components/Astrology/NatalChart';
+import LandingPage from './components/Layout/LandingPage';
+import UserOnboarding, { OnboardingData } from './components/Layout/UserOnboarding';
+import ProfileModal from './components/Profile/ProfileModal';
+import AdminDashboard from './components/Admin/AdminDashboard';
+import Sidebar from './components/Layout/Sidebar';
+import HistoryModal from './components/Profile/HistoryModal';
+import HoroscopeView from './components/Horoscope/HoroscopeView';
+import FullScreenLoader from './components/Layout/FullScreenLoader';
+import { Type, Schema } from '@google/genai';
 
-// Helper for unique IDs
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
-// Declare Razorpay on window
 declare global {
   interface Window {
     Razorpay: any;
+    webkitSpeechRecognition: any;
+    SpeechRecognition: any;
   }
 }
 
+const getZodiacSign = (dateString: string): string => {
+    if (!dateString) return "Aries";
+    const date = new Date(dateString);
+    const day = date.getDate();
+    const month = date.getMonth() + 1;
+    if ((month === 1 && day >= 20) || (month === 2 && day <= 18)) return "Aquarius";
+    if ((month === 2 && day >= 19) || (month === 3 && day <= 20)) return "Pisces";
+    if ((month === 3 && day >= 21) || (month === 4 && day <= 19)) return "Aries";
+    if ((month === 4 && day >= 20) || (month === 5 && day <= 20)) return "Taurus";
+    if ((month === 5 && day >= 21) || (month === 6 && day <= 20)) return "Gemini";
+    if ((month === 6 && day >= 21) || (month === 7 && day <= 22)) return "Cancer";
+    if ((month === 7 && day >= 23) || (month === 8 && day <= 22)) return "Leo";
+    if ((month === 8 && day >= 23) || (month === 9 && day <= 22)) return "Virgo";
+    if ((month === 9 && day >= 23) || (month === 10 && day <= 22)) return "Libra";
+    if ((month === 10 && day >= 23) || (month === 11 && day <= 21)) return "Scorpio";
+    if ((month === 11 && day >= 22) || (month === 12 && day <= 21)) return "Sagittarius";
+    return "Capricorn";
+};
+
 export default function App() {
+  const [hasStarted, setHasStarted] = useState(false);
   const [view, setView] = useState<AppView>(AppView.CHAT);
+  const [isGlobalLoading, setIsGlobalLoading] = useState(true); 
+  const [loadingText, setLoadingText] = useState("Initializing Universe...");
+  const [isAiThinking, setIsAiThinking] = useState(false); 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [userState, setUserState] = useState<UserState>({
-    dailyQuestionsLeft: INITIAL_DAILY_LIMIT,
-    isPremium: false,
-    name: '',
-    gender: '',
-    hasOnboarded: false,
-    birthDate: '',
-    birthTime: '',
-    birthPlace: ''
-  });
-  
-  // Earnings State for Astrologers
+  const [userState, setUserState] = useState<UserState>({ dailyQuestionsLeft: INITIAL_DAILY_LIMIT, isPremium: false, name: '', gender: '', contact: '', hasOnboarded: false, birthDate: '', birthTime: '', birthPlace: '', language: 'en' });
+  const [currentSuggestions, setCurrentSuggestions] = useState<string[]>(SUGGESTED_QUESTIONS);
+  const [products, setProducts] = useState<Product[]>(MOCK_PRODUCTS); 
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [astrologers, setAstrologers] = useState<Astrologer[]>(MOCK_ASTROLOGERS);
   const [astrologerEarnings, setAstrologerEarnings] = useState<Record<string, Earnings>>({});
-
-  // UI Modals
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [historyTab, setHistoryTab] = useState<'all' | 'calls' | 'purchases'>('all');
   const [showPremiumModal, setShowPremiumModal] = useState(false);
+  const [premiumModalReason, setPremiumModalReason] = useState('');
   const [showTipModal, setShowTipModal] = useState(false);
   const [tipAmount, setTipAmount] = useState<string>('');
   const [showChartModal, setShowChartModal] = useState(false);
-  
-  // Purchase & Address State
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
   const [showAddressModal, setShowAddressModal] = useState(false);
-  const [shippingDetails, setShippingDetails] = useState({
-      address: '',
-      city: '',
-      pincode: '',
-      phone: ''
-  });
+  const [shippingDetails, setShippingDetails] = useState({ address: '', city: '', pincode: '', phone: '' });
   const [selectedProductForPurchase, setSelectedProductForPurchase] = useState<Product | null>(null);
-  
-  // Call & Rating State
-  const [callState, setCallState] = useState<CallState>({ isActive: false, type: 'voice', partnerName: '', partnerImage: '' });
+  const [showPaymentConfirmation, setShowPaymentConfirmation] = useState(false);
+  const [pendingPayment, setPendingPayment] = useState<{ amount: number; description: string; onSuccess: () => void; contact?: string; } | null>(null);
+  const [callState, setCallState] = useState<CallState>({ isActive: false, type: 'voice', partnerName: '', partnerImage: '', channelName: '' });
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [ratingTarget, setRatingTarget] = useState<Astrologer | null>(null);
-
-  // Onboarding Form State
-  const [onboardingData, setOnboardingData] = useState({
-    name: '',
-    gender: '',
-    date: '',
-    time: '',
-    place: ''
-  });
-  
+  const [sessionExpiry, setSessionExpiry] = useState<number | null>(null);
+  const [timeLeft, setTimeLeft] = useState<string>('');
+  const [horoscopeData, setHoroscopeData] = useState<HoroscopeData | undefined>(undefined);
+  const [isGeneratingHoroscope, setIsGeneratingHoroscope] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const currentLang = userState.language || 'en';
+  const t = TRANSLATIONS[currentLang] || TRANSLATIONS.en; 
 
-  // TTS Cleanup on Mount/Unmount/Refresh
   useEffect(() => {
-    // Stop any existing speech
-    window.speechSynthesis.cancel();
-    
-    const handleUnload = () => {
-        window.speechSynthesis.cancel();
+    const loadData = async () => {
+        setIsGlobalLoading(true);
+        setLoadingText("Aligning Cosmic Energies...");
+        try {
+            await seedDatabase();
+            const [dbProducts, dbTransactions, dbAstrologers] = await Promise.all([fetchProducts(), fetchTransactions(), fetchAstrologers()]);
+            if (dbProducts.length > 0) setProducts(dbProducts);
+            if (dbTransactions.length > 0) setTransactions(dbTransactions);
+            if (dbAstrologers.length > 0) setAstrologers(dbAstrologers);
+        } catch (e) { console.error(e); } finally { setTimeout(() => setIsGlobalLoading(false), 800); }
     };
-    
-    window.addEventListener('beforeunload', handleUnload);
-    return () => {
-        window.removeEventListener('beforeunload', handleUnload);
-        window.speechSynthesis.cancel();
-    };
+    loadData();
+    const subProducts = subscribeToTable('products', () => fetchProducts().then(setProducts));
+    const subTransactions = subscribeToTable('transactions', () => fetchTransactions().then(setTransactions));
+    const subAstrologers = subscribeToTable('astrologers', () => fetchAstrologers().then(setAstrologers));
+    return () => { subProducts?.unsubscribe(); subTransactions?.unsubscribe(); subAstrologers?.unsubscribe(); };
   }, []);
 
-  // Auto-scroll to bottom
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isLoading, view]);
-
-  // --- HELPER: Update Earnings ---
-  const updateEarnings = (astroId: string, type: keyof Earnings, amount: number) => {
-    setAstrologerEarnings(prev => {
-        const current = prev[astroId] || { chats: 0, products: 0, tips: 0, withdrawn: 0 };
-        return {
-            ...prev,
-            [astroId]: {
-                ...current,
-                [type]: current[type] + amount
-            }
-        };
-    });
-  };
-
-  // --- HELPER: Find products in text ---
-  const findRelevantProducts = (text: string): Product[] => {
-      const lowerText = text.toLowerCase();
-      
-      return MOCK_PRODUCTS.filter(p => {
-          // For Gemstones: The SPECIFIC name must appear (e.g., "Coral" or "Moonga", "Sapphire" or "Pukhraj")
-          if (p.category === 'gemstone') {
-              // Extract core name like "Coral" from "Natural Red Coral (Moonga)"
-              const keywords = p.name.toLowerCase().split(' ').filter(w => w.length > 3 && w !== 'natural' && w !== 'stone');
-              const hasSpecificMatch = keywords.some(k => lowerText.includes(k));
-              return hasSpecificMatch;
-          }
-
-          // For other items (Pooja, Rudraksha), generalized keywords + category matching is okay
-          const nameMatch = p.name.toLowerCase().split(' ').some(word => word.length > 4 && lowerText.includes(word));
-          const catMatch = lowerText.includes(p.category) && lowerText.includes('buy') || lowerText.includes('wear');
-          
-          return nameMatch || (catMatch && Math.random() > 0.7); 
-      }).slice(0, 1); // Only suggest 1 top product to avoid clutter
-  };
-
-  // --- RAZORPAY PAYMENT LOGIC ---
-  const handlePayment = (amount: number, description: string, onSuccess: () => void, contact?: string) => {
-    const options = {
-      key: RAZORPAY_KEY_ID,
-      amount: amount * 100, // Amount in paise
-      currency: "INR",
-      name: "ASTRO-VASTU",
-      description: description,
-      image: "https://cdn-icons-png.flaticon.com/512/2649/2649127.png", // Astrology Icon
-      handler: function (response: any) {
-        // On Success
-        console.log("Payment ID: ", response.razorpay_payment_id);
-        onSuccess();
-      },
-      prefill: {
-        name: userState.name,
-        contact: contact || "9999999999", // Use captured phone or mock
-        email: "seeker@astro.vastu" // Mock email
-      },
-      theme: {
-        color: "#7652D6" // Mystic Purple
+      if (view === AppView.HOROSCOPE && !horoscopeData && userState.hasOnboarded) {
+          generateFullHoroscope();
       }
-    };
+  }, [view, userState.hasOnboarded]);
 
-    if (window.Razorpay) {
-      const rzp1 = new window.Razorpay(options);
-      rzp1.open();
+  const generateFullHoroscope = async () => {
+      setIsGeneratingHoroscope(true);
+      const sign = getZodiacSign(userState.birthDate || '');
       
-      rzp1.on('payment.failed', function (response: any) {
-        alert("Payment Failed: " + response.error.description);
-      });
-    } else {
-      alert("Payment gateway failed to load. Please check internet connection.");
-    }
+      const prompt = `
+        Vedic Horoscope for ${userState.name} (${sign}). 
+        Provide structure with Daily, Weekly, and Monthly insights.
+        Constraints: ${userState.isPremium ? 'Detailed content.' : 'BE VERY CONCISE (GIST ONLY).'} Language: ${userState.language === 'hi' ? 'HINDI' : 'ENGLISH'}.
+      `;
+
+      const schema: Schema = {
+        type: Type.OBJECT,
+        properties: {
+          daily: {
+            type: Type.OBJECT,
+            properties: {
+              overview: { type: Type.STRING },
+              dos: { type: Type.ARRAY, items: { type: Type.STRING } },
+              donts: { type: Type.ARRAY, items: { type: Type.STRING } },
+              luckyColor: { type: Type.STRING },
+              luckyNumber: { type: Type.STRING }
+            },
+            required: ['overview', 'dos', 'donts', 'luckyColor', 'luckyNumber']
+          },
+          weekly: { type: Type.STRING },
+          monthly: { type: Type.STRING },
+          starSign: { type: Type.STRING }
+        },
+        required: ['daily', 'weekly', 'monthly', 'starSign']
+      };
+
+      try {
+          // Increased maxTokens to preventing string truncation in JSON response
+          const data = await generateJsonContent(prompt, userState.isPremium ? 4000 : 2000, schema);
+          if (data && data.daily) { setHoroscopeData(data); } 
+          else { setHoroscopeData({ starSign: sign, daily: { overview: "Stars are shifting.", dos: ["Meditate"], donts: ["Stress"], luckyColor: "White", luckyNumber: "7" }, weekly: "Good week ahead.", monthly: "Plan carefully." }); }
+      } catch (e) { console.error(e); } finally { setIsGeneratingHoroscope(false); }
   };
 
-  const initiateProductPurchase = (product: Product) => {
-      setSelectedProductForPurchase(product);
-      setShippingDetails({ address: '', city: '', pincode: '', phone: '' }); // Reset form
-      setShowAddressModal(true);
+  const handleSendYearlyReport = () => {
+      if(!userState.isPremium) { setPremiumModalReason("Yearly Reports are for Premium Members only."); setShowPremiumModal(true); return; }
+      logCommunication('email', userState.contact || 'User', 'outbound', 'sent', 'Yearly Report 2024');
+      alert(`Yearly Report has been emailed to ${userState.contact}!`);
   };
 
-  const confirmPurchaseWithAddress = () => {
-      if (!selectedProductForPurchase) return;
-      const { address, city, pincode, phone } = shippingDetails;
-      
-      if (!address.trim() || !city.trim() || !pincode.trim() || !phone.trim()) {
-          alert("Please fill in all shipping details to proceed.");
-          return;
-      }
-      
-      const product = selectedProductForPurchase;
-      const fullAddress = `${address}, ${city} - ${pincode}\nContact: ${phone}`;
-      
-      handlePayment(product.price, `Order: ${product.name}`, () => {
-          // ACCOUNTING: If connected to an Astrologer, they get 10% commission
-          if (userState.connectedAstrologerId) {
-              updateEarnings(userState.connectedAstrologerId, 'products', product.price * 0.10);
-          }
+  useEffect(() => {
+      if (userState.isAdminImpersonating) return;
+      const saveToDb = async () => { if (userState.hasOnboarded && userState.contact && userState.contact !== 'ADMIN') await saveUserProfile(userState, undefined, messages); };
+      const timer = setTimeout(saveToDb, 2000); 
+      return () => clearTimeout(timer);
+  }, [userState, messages]);
 
-          const msg: Message = {
-              id: generateId(),
-              text: `✅ Purchase Successful!\n\n**${product.name}**\nwill be shipped to:\n${fullAddress}\n\nExpected Delivery: 5-7 Days.`,
-              sender: Sender.SYSTEM,
-              timestamp: new Date()
-          };
-          setMessages(prev => [...prev, msg]);
-          setShowAddressModal(false);
-          setSelectedProductForPurchase(null);
-          if (view === AppView.SHOP) setView(AppView.CHAT);
-      }, phone);
-  };
+  useEffect(() => {
+    if (!sessionExpiry || !userState.connectedAstrologerId) { setTimeLeft(''); return; }
+    const interval = setInterval(() => {
+        const diff = sessionExpiry - Date.now();
+        if (diff <= 0) { clearInterval(interval); disconnectAstrologer(); setMessages(prev => [...prev, { id: generateId(), text: "System: Your 10-minute session has ended.", sender: Sender.SYSTEM, timestamp: new Date() }]); }
+        else { const mins = Math.floor(diff / 60000); const secs = Math.floor((diff % 60000) / 1000); setTimeLeft(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`); }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [sessionExpiry, userState.connectedAstrologerId]);
 
-  const handleOnboardingSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!onboardingData.name || !onboardingData.gender || !onboardingData.date || !onboardingData.time || !onboardingData.place) return;
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isAiThinking, view]);
 
-    setUserState(prev => ({
-      ...prev,
-      name: onboardingData.name,
-      gender: onboardingData.gender,
-      birthDate: onboardingData.date,
-      birthTime: onboardingData.time,
-      birthPlace: onboardingData.place,
-      hasOnboarded: true
-    }));
-
-    // Initialize Chat with User Context
-    const systemInstruction = generateSystemInstruction(
-      onboardingData.name,
-      onboardingData.gender,
-      onboardingData.date,
-      onboardingData.time,
-      onboardingData.place
-    );
-
-    initializeChat(systemInstruction).then(async () => {
-        setIsLoading(true);
-        // Initial Prompt for Vastu and Destiny - Injecting Current Time
-        const now = new Date().toLocaleString();
-        try {
-            // UPDATED PROMPT: Explicitly asking for Full Vastu in Deep Dive to satisfy "First Output" requirement
-            const initialPrompt = `[System: Current Date & Time is ${now}] Start the session. 1. Explain Meaning of Name. 2. Destiny Overview. 3. Current Challenges & Prosperity (Diagnosis). 4. Vastu Hint. 5. Blockage Warning. Deep Dive: 1. Full Vastu Analysis (Brief & Actionable). 2. Remedies.`;
-            const responseText = await sendMessageToGemini(initialPrompt);
-            
-            const welcomeMsg: Message = {
-                id: generateId(),
-                text: responseText,
-                sender: Sender.AI,
-                timestamp: new Date(),
-                isLocked: true // Initial message is always locked to show the "Gist" behavior
-            };
-            setMessages([welcomeMsg]);
-            
-            // Note: We no longer auto-trigger the modal here. 
-            // The user must click the "Unlock Full Potential" banner in the message bubble.
-
-        } catch (err) {
-            console.error(err);
-        } finally {
-            setIsLoading(false);
-        }
-    }).catch(console.error);
+  const updateDynamicSuggestions = (lastInput: string) => {
+      const askedQuestions = new Set(messages.filter(m => m.sender === Sender.USER).map(m => m.text));
+      askedQuestions.add(lastInput);
+      const lowerInput = lastInput.toLowerCase();
+      let newPool: string[] = [];
+      Object.keys(TOPIC_QUESTIONS).forEach(keyword => { if (lowerInput.includes(keyword)) { newPool = [...newPool, ...TOPIC_QUESTIONS[keyword]]; } });
+      if (newPool.length === 0) { newPool = [...SUGGESTED_QUESTIONS]; }
+      const filteredPool = newPool.filter(q => !askedQuestions.has(q));
+      setCurrentSuggestions(filteredPool.sort(() => 0.5 - Math.random()).slice(0, 4));
   };
 
   const handleSendMessage = async (overrideText?: string) => {
     const textToSend = overrideText || input;
-    if (!textToSend.trim() || isLoading) return;
-
-    // If connected to astrologer, sending logic differs (simulated)
-    if (userState.connectedAstrologerId) {
-        const userMsg: Message = {
-            id: generateId(),
-            text: textToSend,
-            sender: Sender.USER,
-            timestamp: new Date()
-        };
-        setMessages(prev => [...prev, userMsg]);
-        setInput('');
-        return;
-    }
-
-    if (userState.dailyQuestionsLeft <= 0) {
-      setShowPremiumModal(true);
-      return;
-    }
-
-    const userMsg: Message = {
-      id: generateId(),
-      text: textToSend,
-      sender: Sender.USER,
-      timestamp: new Date()
-    };
-
-    setMessages(prev => [...prev, userMsg]);
-    setInput('');
-    setIsLoading(true);
-
+    if (!textToSend.trim() || isAiThinking) return;
+    updateDynamicSuggestions(textToSend);
+    if (userState.connectedAstrologerId) { setMessages(prev => [...prev, { id: generateId(), text: textToSend, sender: Sender.USER, timestamp: new Date() }]); setInput(''); return; }
+    if (userState.dailyQuestionsLeft <= 0 && !userState.isAdminImpersonating) { setPremiumModalReason('Daily question limit reached.'); setShowPremiumModal(true); return; }
+    
+    setMessages(prev => [...prev, { id: generateId(), text: textToSend, sender: Sender.USER, timestamp: new Date() }]); 
+    setInput(''); 
+    setIsAiThinking(true);
+    
     try {
-      // INJECT CURRENT DATE AND TIME INTO PROMPT
-      const currentTimestamp = new Date().toLocaleString('en-US', {
-        weekday: 'long', 
-        year: 'numeric', 
-        month: 'long', 
-        day: 'numeric', 
-        hour: '2-digit', 
-        minute: '2-digit'
-      });
+      // Prompt Engineering for Premium vs Free
+      let apiPrompt = textToSend;
+      const isPremiumUser = userState.isPremium || !!userState.isAdminImpersonating;
       
-      const promptWithContext = `[Current Real-Time: ${currentTimestamp}] ${textToSend}`;
-
-      const responseText = await sendMessageToGemini(promptWithContext);
+      if (isPremiumUser) {
+         // Premium: Direct answers for subsequent questions
+         apiPrompt = `${textToSend} (Be direct, precise, and to the point. Avoid generic fillers.)`;
+      }
       
-      // Determine lock state based on content type
+      const responseText = await sendMessageToGemini(apiPrompt, isPremiumUser);
+      
+      // Basic check if response has "Deep Dive"
       const hasDeepDive = responseText.includes("Deep Dive:");
-      const shouldLock = !userState.isPremium && hasDeepDive;
       
-      // SCAN FOR PRODUCT SUGGESTIONS
-      const suggestedProducts = findRelevantProducts(responseText);
+      // Auto-suggest products based on keywords in response
+      const lowerResponse = responseText.toLowerCase();
+      const suggestedProducts = products.filter(p => {
+          const nameWords = p.name.toLowerCase().split(' ');
+          const cat = p.category.toLowerCase();
+          // Check if response mentions product name or category
+          return lowerResponse.includes(cat) || nameWords.some(w => w.length > 4 && lowerResponse.includes(w));
+      }).slice(0, 1);
 
-      const aiMsg: Message = {
-        id: generateId(),
-        text: responseText,
-        sender: Sender.AI,
-        timestamp: new Date(),
-        isLocked: shouldLock,
-        suggestedProducts: suggestedProducts.length > 0 ? suggestedProducts : undefined
-      };
-
-      setMessages(prev => [...prev, aiMsg]);
-
-      // Decrement limit
-      setUserState(prev => ({
-          ...prev,
-          dailyQuestionsLeft: prev.dailyQuestionsLeft - 1
-      }));
-
-    } catch (error) {
-      console.error("Error sending message", error);
-      const errorMsg: Message = {
-        id: generateId(),
-        text: "The cosmic connection is weak. Please try again.",
-        sender: Sender.AI,
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, errorMsg]);
-    } finally {
-      setIsLoading(false);
-    }
+      setMessages(prev => [...prev, { id: generateId(), text: responseText, sender: Sender.AI, timestamp: new Date(), isLocked: hasDeepDive && !isPremiumUser, suggestedProducts: suggestedProducts.length > 0 ? suggestedProducts : undefined }]);
+      if (!userState.isAdminImpersonating) setUserState(prev => ({ ...prev, dailyQuestionsLeft: prev.dailyQuestionsLeft - 1 }));
+    } catch (error) { setMessages(prev => [...prev, { id: generateId(), text: "Clouded connection.", sender: Sender.AI, timestamp: new Date() }]); } 
+    finally { setIsAiThinking(false); }
   };
 
-  const handleUnlockMessage = (messageId: string) => {
-    if (!userState.isPremium) {
-       setShowPremiumModal(true);
-    } else {
-      // If already premium, just ensure UI updates (MessageBubble handles local state)
-    }
+  const handleSeekerEnter = () => setHasStarted(true);
+  const handleAdminEnter = async () => { 
+      setHasStarted(true); 
+      setUserState(prev => ({ ...prev, hasOnboarded: true, name: 'Administrator', contact: 'ADMIN', isPremium: true }));
+      const token = generateJWT('ADMIN');
+      localStorage.setItem('astro_token', token);
+      await logCommunication('system', 'ADMIN', 'internal', 'completed', 'Admin Session Started');
+      setView(AppView.ADMIN_DASHBOARD); 
+  };
+  
+  const handleImpersonateUser = async (targetUser: any) => {
+      setIsGlobalLoading(true);
+      setLoadingText(`Logging in as ${targetUser.name}...`);
+      try {
+          const { profile, chatHistory } = await fetchUserProfile(targetUser.contact);
+          if (profile) {
+              setUserState({ ...profile, hasOnboarded: true, contact: profile.contact, name: profile.name, isPremium: profile.isPremium, dailyQuestionsLeft: profile.dailyQuestionsLeft, birthDate: profile.birthDate, birthTime: profile.birthTime, birthPlace: profile.birthPlace, subscriptionExpiry: profile.subscriptionExpiry, language: 'en', isAdminImpersonating: true });
+              const instr = generateSystemInstruction(profile.name, profile.gender, profile.birthDate, profile.birthTime, profile.birthPlace, 'en');
+              initializeChat(instr).then(() => { if(chatHistory.length > 0) setMessages(chatHistory); else setMessages([{ id:generateId(), text:`[ADMIN MODE] ${profile.name}`, sender:Sender.SYSTEM, timestamp:new Date() }]); });
+              setView(AppView.CHAT);
+          }
+      } catch (e) { alert("Failed to impersonate."); } finally { setIsGlobalLoading(false); }
   };
 
-  const handleGuruDakshina = (amount: number) => {
-    handlePayment(amount, `Dakshina for Guru`, () => {
-        // ACCOUNTING: Guru gets 80% of Dakshina/Tip
-        if (userState.connectedAstrologerId) {
-            updateEarnings(userState.connectedAstrologerId, 'tips', amount * 0.80);
+  const handleExitImpersonation = () => { setView(AppView.ADMIN_DASHBOARD); setUserState(prev => ({ ...prev, isAdminImpersonating: false, name: 'Administrator', contact: 'ADMIN' })); };
+
+  const handleSeekerLogin = async (contact: string) => {
+      setHasStarted(true); 
+      setIsGlobalLoading(true);
+      setLoadingText("Retrieving destiny...");
+      try {
+          const { profile, chatHistory } = await fetchUserProfile([contact.trim()]);
+          if (profile) {
+              const token = generateJWT(profile.contact);
+              localStorage.setItem('astro_token', token);
+              setUserState(prev => ({ ...prev, hasOnboarded: true, contact: profile.contact, name: profile.name, isPremium: profile.isPremium, dailyQuestionsLeft: profile.dailyQuestionsLeft, birthDate: profile.birthDate, birthTime: profile.birthTime, birthPlace: profile.birthPlace, subscriptionExpiry: profile.subscriptionExpiry }));
+              const instr = generateSystemInstruction(profile.name, profile.gender, profile.birthDate, profile.birthTime, profile.birthPlace, 'en');
+              initializeChat(instr).then(() => { if(chatHistory.length>0) setMessages([...chatHistory, { id:generateId(), text:"Welcome back.", sender:Sender.SYSTEM, timestamp:new Date() }]); else setMessages([{ id:generateId(), text:`Welcome back, ${formatDisplayName(profile.name)}.`, sender:Sender.AI, timestamp:new Date() }]); });
+          } else { setHasStarted(false); }
+      } catch(e) { setHasStarted(false); } finally { setIsGlobalLoading(false); }
+  };
+
+  useEffect(() => {
+    if (!hasStarted) {
+        const token = localStorage.getItem('astro_token');
+        if (token) {
+            const contact = verifyJWT(token);
+            if (contact) { if (contact === 'ADMIN') handleAdminEnter(); else handleSeekerLogin(contact); }
+            else { localStorage.removeItem('astro_token'); }
         }
+    }
+  }, [hasStarted]);
 
-        const sysMsg: Message = {
-            id: generateId(),
-            text: `Dakshina of ₹${amount} received with blessings.`,
-            sender: Sender.SYSTEM,
-            timestamp: new Date()
-        };
-        setMessages(prev => [...prev, sysMsg]);
-        setShowTipModal(false);
-    });
+  const handleOnboardingSubmit = (data: OnboardingData, isPremium: boolean) => {
+      const final = async () => {
+          setIsGlobalLoading(true);
+          try {
+            const uniqueName = await generateUniqueUsername(data.name);
+            const newUser = { ...userState, name: uniqueName, contact: data.contact, gender: data.gender, birthDate: data.date, birthTime: data.time, birthPlace: data.place, isPremium, dailyQuestionsLeft: isPremium ? PREMIUM_DAILY_LIMIT : INITIAL_DAILY_LIMIT, hasOnboarded: true };
+            setUserState(newUser); 
+            await saveUserProfile(newUser, data.password);
+            const token = generateJWT(newUser.contact || 'User');
+            localStorage.setItem('astro_token', token);
+            if(isPremium) addTransaction(299, 'Subscription', 'Premium Activation', newUser);
+            
+            const instr = generateSystemInstruction(uniqueName, data.gender, data.date, data.time, data.place, userState.language);
+            await initializeChat(instr);
+            
+            // --- DETERMINISTIC INITIAL RESPONSE ---
+            // Construct a unique key based on natal details to ensure identical responses for identical profiles
+            const cacheKey = `${data.name.trim().toLowerCase()}_${data.date}_${data.time}_${data.place.trim().toLowerCase()}`.replace(/\s+/g, '_');
+            
+            let txt = await fetchCachedReading(cacheKey);
+            let fromCache = true;
+
+            if (!txt) {
+                fromCache = false;
+                // Customized First Output based on Premium Status
+                let prompt = "Initial Overview: Name, Challenges, Vastu Hint, Warning. Deep Dive: Full Vastu.";
+                
+                if (isPremium) {
+                    prompt = `
+                    I AM A PREMIUM SEEKER. GENERATE A DIVINE, STRUCTURED ASTROLOGICAL DECREE.
+                    STRICTLY FOLLOW THIS STRUCTURE:
+                    1. **Divine Greeting**: Welcoming the soul (Higher Being tone).
+                    2. **Spiritual Significance of Name**: Meaning of ${uniqueName}.
+                    3. **Cosmic Blueprint (Birth Chart)**: Lagna, Moon Sign, Key Yogas (Raj Yogas/Dhan Yogas).
+                    4. **Time's Current Flow**: Current Dasha/Period analysis.
+                    5. **Immediate Remedy**: One powerful, actionable ritual.
+                    6. **Vastu Architecture**: ASCII Map with specific defects.
+                    7. **Gemstones & Mantras**: Specific recommendations (mention 'Coral', 'Sapphire', or 'Rudraksha' if applicable to trigger shop).
+                    8. **Closing Blessing**.
+                    Deep Dive: Detailed planetary nuances.
+                    `;
+                }
+                
+                txt = await sendMessageToGemini(prompt, isPremium);
+                
+                // Save to cache for future users with identical details
+                if (txt && txt.length > 50) {
+                    await saveCachedReading(cacheKey, txt);
+                }
+            }
+            
+            // Trigger shop suggestions on first message if keywords exist
+            const lowerResponse = txt.toLowerCase();
+            const suggestedProducts = products.filter(p => {
+                const nameWords = p.name.toLowerCase().split(' ');
+                const cat = p.category.toLowerCase();
+                return lowerResponse.includes(cat) || nameWords.some(w => w.length > 4 && lowerResponse.includes(w));
+            }).slice(0, 1);
+
+            setMessages([{id:generateId(), text:txt, sender:Sender.AI, timestamp:new Date(), isLocked:true, suggestedProducts: suggestedProducts.length > 0 ? suggestedProducts : undefined}]);
+          } catch(e) { console.error(e); } 
+          finally { setIsGlobalLoading(false); }
+      };
+      if(isPremium) initiatePayment(299, "Premium", final, data.contact); else final();
   };
 
-  const connectToAstrologer = (astro: Astrologer) => {
-      // 1. Resume existing session if it's the same astrologer
-      if (userState.connectedAstrologerId === astro.id) {
-          setView(AppView.CHAT);
-          return;
-      }
-
-      // 2. Prevent multiple sessions
-      if (userState.connectedAstrologerId) {
-          alert("You are already connected to an astrologer. Please end the current session first.");
-          return;
-      }
-
-      // 3. Initiate New Payment for session
-      const sessionCost = astro.pricePerMin * 10;
-      handlePayment(sessionCost, `10 Min Session with ${astro.name}`, () => {
-          // ACCOUNTING: Guru gets 90% of Chat Session fee
-          updateEarnings(astro.id, 'chats', sessionCost * 0.90);
-
-          setUserState(prev => ({
-              ...prev,
-              connectedAstrologerId: astro.id
-          }));
-          setRatingTarget(astro);
-          setView(AppView.CHAT);
-          setMessages(prev => [...prev, {
-              id: generateId(),
-              text: `System: You are now connected to ${astro.name}. Your session has started.`,
-              sender: Sender.SYSTEM,
-              timestamp: new Date()
-          }]);
-      });
+  const handleLogout = () => { localStorage.removeItem('astro_token'); setHasStarted(false); setUserState({ dailyQuestionsLeft: INITIAL_DAILY_LIMIT, isPremium: false, name: '', gender: '', contact: '', hasOnboarded: false, birthDate: '', birthTime: '', birthPlace: '', language: 'en' }); setMessages([]); setView(AppView.CHAT); };
+  const handleLanguageChange = (lang: Language) => { setUserState(prev => ({ ...prev, language: lang })); setHoroscopeData(undefined); };
+  const verifyUserCredentials = async (c: string, p: string) => { const { profile } = await fetchUserProfile([c, c.trim()]); return profile && profile.password ? await verifyPassword(p, profile.password) : false; };
+  const initiatePayment = (amount: number, desc: string, success: () => void, contact?: string) => { setPendingPayment({ amount, description: desc, onSuccess: success, contact }); setShowPaymentConfirmation(true); };
+  const updateEarnings = (id: string, type: keyof Earnings, amt: number) => setAstrologerEarnings(p => ({...p, [id]: {...(p[id]||{chats:0,products:0,tips:0,withdrawn:0}), [type]: (p[id]?.[type]||0)+amt}}));
+  
+  const addTransaction = (amt: number, type: 'Product' | 'Subscription' | 'Dakshina' | 'Consultation', det: string, userOverride?: UserState) => { 
+      const currentUser = userOverride || userState;
+      const tx:Transaction={ id: generateReferenceId(type, det), userId:currentUser.contact||'u', userName:currentUser.name||'Guest', amount:amt, type, status:'Success', date:new Date().toISOString().split('T')[0], details:det }; 
+      setTransactions(p=>[tx,...p]); saveTransaction(tx); 
   };
+  
+  const proceedToRazorpay = () => { if(pendingPayment && window.Razorpay) { const rzp = new window.Razorpay({ key: RAZORPAY_KEY_ID, amount: pendingPayment.amount*100, currency: "INR", name: "ASTRO-VASTU", description: pendingPayment.description, handler: () => { pendingPayment.onSuccess(); setShowPaymentConfirmation(false); }, prefill: { contact: pendingPayment.contact } }); rzp.open(); } else alert("Razorpay offline"); };
+  const initiateProductPurchase = (p: Product) => { setSelectedProductForPurchase(p); setShippingDetails({ address:'', city:'', pincode:'', phone:'' }); setShowAddressModal(true); };
+  const confirmPurchaseWithAddress = () => { if(!selectedProductForPurchase) return; initiatePayment(selectedProductForPurchase.price, selectedProductForPurchase.name, () => { addTransaction(selectedProductForPurchase!.price, 'Product', selectedProductForPurchase!.name); setMessages(p=>[...p, {id:generateId(), text:`Purchased ${selectedProductForPurchase!.name}`, sender:Sender.SYSTEM, timestamp:new Date()}]); setShowAddressModal(false); }); };
+  const handleUnlockMessage = (id: string) => setMessages(p => p.map(m => m.id===id ? {...m, isLocked:false} : m));
+  const handleGuruDakshina = (amt: number) => initiatePayment(amt, 'Dakshina', () => { if(userState.connectedAstrologerId) updateEarnings(userState.connectedAstrologerId, 'tips', amt*0.8); addTransaction(amt, 'Dakshina', 'Tip'); setShowTipModal(false); });
+  const connectToAstrologer = (a: Astrologer) => { if(!userState.isPremium && !userState.isAdminImpersonating) { setPremiumModalReason("Premium Required"); setShowPremiumModal(true); return; } initiatePayment(a.pricePerMin*10, 'Session', () => { setUserState(p=>({...p, connectedAstrologerId:a.id})); setSessionExpiry(Date.now()+600000); setRatingTarget(a); setView(AppView.CHAT); }); };
+  const disconnectAstrologer = () => { setUserState(p=>({...p, connectedAstrologerId:undefined})); setSessionExpiry(null); setCallState(p=>({...p, isActive:false})); setShowRatingModal(true); };
+  const handleAcceptCall = (mid: string, t: 'voice'|'video') => { if(userState.connectedAstrologerId) setCallState({isActive:true, type:t, partnerName:'Guru', partnerImage:'', channelName:userState.connectedAstrologerId, messageId:mid}); };
+  const handleCallEnd = (d: number) => { setCallState(p=>({...p, isActive:false})); if(callState.messageId) setMessages(p=>p.map(m=>m.id===callState.messageId ? {...m, metadata:{...m.metadata, callStatus:'ended', durationText:`${d}s`}} : m)); };
+  const handleAstrologerAction = (act: string, pl: any) => { if(act==='call') { setMessages(p=>[...p, {id:generateId(), text:'Incoming Call', sender:Sender.ASTROLOGER, type:MessageType.CALL_OFFER, metadata:{callType:pl.type}, timestamp:new Date()}]); setCallState({isActive:true, type:pl.type, partnerName:'User', partnerImage:'', channelName:pl.astroId}); } else if(act==='reply') setMessages(p=>[...p,{id:generateId(), text:pl, sender:Sender.ASTROLOGER, timestamp:new Date()}]); else if(act==='end_session') disconnectAstrologer(); };
+  const openHistory = (tab: any) => { setHistoryTab(tab); setShowHistoryModal(true); setIsSidebarOpen(false); };
+  const startRecording = () => { if(window.webkitSpeechRecognition) { const r = new window.webkitSpeechRecognition(); r.onresult = (e:any) => setInput(p=>p+e.results[0][0].transcript); r.start(); setIsRecording(true); r.onend=()=>setIsRecording(false); } };
+  const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); };
 
-  const disconnectAstrologer = () => {
-      setUserState(prev => ({
-          ...prev,
-          connectedAstrologerId: undefined
-      }));
-      setShowRatingModal(true);
-  };
-
-  const handleRateGuru = (rating: number, comment: string) => {
-      console.log(`Rated ${rating} stars. Comment: ${comment}`);
-      // Send data to backend here
-      setShowRatingModal(false);
-      setMessages(prev => [...prev, {
-          id: generateId(),
-          text: `System: Thank you for your feedback. Session Ended.`,
-          sender: Sender.SYSTEM,
-          timestamp: new Date()
-      }]);
-  };
-
-  // --- CALL LOGIC ---
-  const handleAcceptCall = (type: 'voice' | 'video') => {
-      const guru = MOCK_ASTROLOGERS.find(a => a.id === userState.connectedAstrologerId);
-      if (guru) {
-          setCallState({
-              isActive: true,
-              type: type,
-              partnerName: guru.name,
-              partnerImage: guru.imageUrl
-          });
-      }
-  };
-
-  const handleEndCall = () => {
-      setCallState(prev => ({ ...prev, isActive: false }));
-  };
-
-  // Astrologer Panel Handler (Simulates Guru Actions)
-  const handleAstrologerAction = (actionType: 'reply' | 'call' | 'request_payment' | 'end_session' | 'recommend_product' | 'payout', payload: any) => {
-      const astroId = userState.connectedAstrologerId || '1'; // Fallback if testing dashboard independently
-      
-      if (actionType === 'reply') {
-        const msg: Message = {
-            id: generateId(),
-            text: payload,
-            sender: Sender.ASTROLOGER,
-            astrologerId: astroId,
-            timestamp: new Date()
-        };
-        setMessages(prev => [...prev, msg]);
-      } 
-      else if (actionType === 'call') {
-        const msg: Message = {
-            id: generateId(),
-            text: `Incoming ${payload} call...`,
-            sender: Sender.ASTROLOGER,
-            astrologerId: astroId,
-            type: MessageType.CALL_OFFER,
-            metadata: { callType: payload },
-            timestamp: new Date()
-        };
-        setMessages(prev => [...prev, msg]);
-      }
-      else if (actionType === 'request_payment') {
-          const msg: Message = {
-              id: generateId(),
-              text: `Guru has requested Dakshina`,
-              sender: Sender.ASTROLOGER,
-              astrologerId: astroId,
-              type: MessageType.PAYMENT_REQUEST,
-              metadata: { amount: payload },
-              timestamp: new Date()
-          };
-          setMessages(prev => [...prev, msg]);
-      }
-      else if (actionType === 'recommend_product') {
-          const msg: Message = {
-              id: generateId(),
-              text: `I highly recommend you use this spiritual remedy for your current dosha.`,
-              sender: Sender.ASTROLOGER,
-              astrologerId: astroId,
-              timestamp: new Date(),
-              suggestedProducts: [payload]
-          };
-          setMessages(prev => [...prev, msg]);
-      }
-      else if (actionType === 'end_session') {
-          disconnectAstrologer();
-      }
-      else if (actionType === 'payout') {
-          const targetAstroId = payload.astroId;
-          const amount = payload.amount;
-          updateEarnings(targetAstroId, 'withdrawn', amount);
-      }
-  };
+  if (isGlobalLoading) return <FullScreenLoader text={loadingText} />;
+  if (!hasStarted) return <LandingPage onSeekerEnter={handleSeekerEnter} onSeekerLogin={handleSeekerLogin} onVerifyCredentials={verifyUserCredentials} onGuruEnter={() => { setHasStarted(true); setUserState(p=>({...p, hasOnboarded:true})); setView(AppView.ASTRO_DASHBOARD); }} onAdminEnter={handleAdminEnter} />;
+  if (view === AppView.ADMIN_DASHBOARD) return <div className="relative min-h-screen"><StarBackground /><div className="relative z-10 h-screen"><AdminDashboard products={products} transactions={transactions} astrologers={astrologers} onUpdateProducts={setProducts} onLogout={handleLogout} onImpersonate={handleImpersonateUser} /></div></div>;
 
   return (
     <div className="relative min-h-screen font-sans text-mystic-100 flex flex-col bg-mystic-900 overflow-hidden">
       <StarBackground />
-      
-      {/* Call Interface Overlay */}
-      {callState.isActive && (
-          <CallInterface 
-            partnerName={callState.partnerName} 
-            partnerImage={callState.partnerImage} 
-            callType={callState.type} 
-            onEndCall={handleEndCall} 
-          />
+      {userState.hasOnboarded && <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} user={userState} onNavigate={(v) => { if(v==='chart') setShowChartModal(true); else setView(v as AppView); setIsSidebarOpen(false); }} onOpenProfile={() => { setShowProfileModal(true); setIsSidebarOpen(false); }} onOpenHistory={openHistory} onLogout={handleLogout} onLanguageChange={handleLanguageChange} />}
+      {showHistoryModal && <HistoryModal transactions={transactions.filter(t => t.userId === userState.contact)} onClose={() => setShowHistoryModal(false)} initialTab={historyTab} />}
+      {callState.isActive && <CallInterface partnerName={callState.partnerName} partnerImage={callState.partnerImage} callType={callState.type} onEndCall={handleCallEnd} channelName={callState.channelName || 'default'} />}
+      {userState.isAdminImpersonating && <button onClick={handleExitImpersonation} className="fixed bottom-24 right-4 z-[60] bg-orange-600 hover:bg-orange-500 text-white font-bold py-3 px-6 rounded-full shadow-2xl border-2 border-orange-400 animate-bounce">🚪 Exit Admin Mode</button>}
+
+      {userState.hasOnboarded && (
+          <header className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between p-4 md:p-6 border-b border-white/5 bg-mystic-900/95 backdrop-blur-2xl transition-all shadow-2xl">
+            <div className="flex items-center gap-4">
+                <button onClick={() => setIsSidebarOpen(true)} className="p-2 -ml-2 text-gold-400 hover:text-white transition-colors"><svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" /></svg></button>
+                <div className="flex flex-col items-start gap-1">
+                    <div className="flex bg-white/5 rounded-full p-0.5 border border-white/10 text-[10px] font-bold">
+                        <button onClick={() => handleLanguageChange('en')} className={`px-2 py-0.5 rounded-full transition-all ${userState.language === 'en' ? 'bg-gold-500 text-mystic-900' : 'text-mystic-400'}`}>EN</button>
+                        <button onClick={() => handleLanguageChange('hi')} className={`px-2 py-0.5 rounded-full transition-all ${userState.language === 'hi' ? 'bg-gold-500 text-mystic-900' : 'text-mystic-400'}`}>HI</button>
+                    </div>
+                    <h1 className="text-xl md:text-2xl font-serif font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-mystic-200 truncate">{t.appName}</h1>
+                </div>
+            </div>
+            <div className="flex items-center gap-3">
+                {userState.connectedAstrologerId && <div className="text-[10px] text-green-400 font-bold border border-green-500/30 px-2 py-1 rounded-full animate-pulse">LIVE {timeLeft}</div>}
+                {userState.connectedAstrologerId && <button onClick={disconnectAstrologer} className="bg-red-900/30 text-red-400 px-3 py-1.5 rounded-full text-xs font-bold uppercase">{t.endChat}</button>}
+                <div className="hidden md:flex bg-white/5 rounded-full p-1 border border-white/10">
+                    {[AppView.CHAT, AppView.HOROSCOPE, AppView.MARKETPLACE, AppView.SHOP].map((v) => (
+                        <button key={v} onClick={() => setView(v)} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${view === v ? 'bg-mystic-100 text-mystic-900' : 'text-mystic-400 hover:text-white'}`}>{v === AppView.HOROSCOPE ? 'Insights' : v === AppView.CHAT ? t.chat : v === AppView.MARKETPLACE ? t.gurus : t.shop}</button>
+                    ))}
+                </div>
+            </div>
+          </header>
       )}
 
-      {/* Header - Fixed Top with Strong Backdrop */}
-      <header className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between p-4 md:p-6 border-b border-white/5 bg-mystic-900/95 backdrop-blur-2xl transition-all shadow-2xl shadow-black/20">
-        <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-violet-600 to-indigo-900 flex items-center justify-center text-xl shadow-lg shadow-violet-500/30">
-                🔮
-            </div>
-            <div className="flex flex-col justify-center">
-                <h1 className="text-xl md:text-2xl font-serif font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-mystic-200 truncate leading-none">
-                    ASTRO-VASTU
-                </h1>
-                {userState.connectedAstrologerId && (
-                     <div className="text-[10px] text-green-400 font-bold tracking-widest flex items-center gap-1 mt-1 animate-in fade-in">
-                        <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
-                        CONNECTED TO GURU
-                     </div>
-                )}
-            </div>
-        </div>
-        
-        <div className="flex items-center gap-3">
-            {/* Show 'Your Chart' if onboarded */}
-            {userState.hasOnboarded && (
-                <button 
-                    onClick={() => setShowChartModal(true)}
-                    className="hidden md:flex items-center gap-1 bg-mystic-800/50 hover:bg-gold-500/20 border border-mystic-600 hover:border-gold-500/50 text-mystic-300 hover:text-gold-400 px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider transition-colors"
-                >
-                    📜 Your Chart
-                </button>
-            )}
-
-            {/* End Chat Button (User Side) */}
-            {userState.connectedAstrologerId && view === AppView.CHAT && (
-                 <button 
-                    onClick={disconnectAstrologer}
-                    className="hidden md:flex items-center gap-1 bg-red-900/30 hover:bg-red-900/50 border border-red-500/50 text-red-400 px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider transition-colors"
-                >
-                    End Chat
-                </button>
-            )}
-
-            {/* Tip Guru Button (Only when connected) */}
-            {userState.connectedAstrologerId && view === AppView.CHAT && (
-                <button 
-                    onClick={() => setShowTipModal(true)}
-                    className="hidden md:flex items-center gap-1 bg-gold-500/20 hover:bg-gold-500/40 border border-gold-500/50 text-gold-400 px-3 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider transition-colors"
-                >
-                    <span>🕉️</span> Tip Guru
-                </button>
-            )}
-
-            {userState.hasOnboarded && !userState.connectedAstrologerId && (
-                <div 
-                    onClick={() => !userState.isPremium && setShowPremiumModal(true)}
-                    className="cursor-pointer hidden md:flex flex-col items-end mr-2 group"
-                >
-                    <span className="text-xs text-mystic-300 uppercase tracking-wider">
-                        {userState.isPremium ? 'Premium Energy' : 'Free Energy'}
-                    </span>
-                    <div className="flex gap-1 mt-1">
-                        {/* Show remaining questions visually limited to 10 dots max to avoid UI break */}
-                        {[...Array(Math.min(10, Math.max(0, userState.dailyQuestionsLeft)))].map((_, i) => (
-                            <div key={i} className={`w-2 h-2 rounded-full ${userState.isPremium ? 'bg-indigo-400 shadow-[0_0_8px_#818CF8]' : 'bg-gold-400 shadow-[0_0_8px_#FBBF24]'}`} />
-                        ))}
-                        {/* Show used/empty slots if count is low */}
-                        {!userState.isPremium && [...Array(Math.max(0, INITIAL_DAILY_LIMIT - userState.dailyQuestionsLeft))].map((_, i) => (
-                            <div key={i} className="w-2 h-2 rounded-full bg-mystic-700 border border-white/10" />
-                        ))}
-                    </div>
-                </div>
-            )}
-            
-            {/* Main Navigation Tabs - Desktop */}
-            {userState.hasOnboarded && (
-                <div className="hidden md:flex bg-white/5 rounded-full p-1 border border-white/10">
-                    <button 
-                        onClick={() => setView(AppView.CHAT)}
-                        className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${view === AppView.CHAT ? 'bg-mystic-100 text-mystic-900' : 'text-mystic-400 hover:text-white'}`}
-                    >
-                        Chat
-                    </button>
-                    <button 
-                        onClick={() => setView(AppView.MARKETPLACE)}
-                        className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${view === AppView.MARKETPLACE ? 'bg-mystic-100 text-mystic-900' : 'text-mystic-400 hover:text-white'}`}
-                    >
-                        Gurus
-                    </button>
-                    <button 
-                        onClick={() => setView(AppView.SHOP)}
-                        className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${view === AppView.SHOP ? 'bg-mystic-100 text-mystic-900' : 'text-mystic-400 hover:text-white'}`}
-                    >
-                        Shop
-                    </button>
-                </div>
-            )}
-            
-            {/* Mobile Navigation Toggle (Simple for now: Toggle View) */}
-            {userState.hasOnboarded && (
-                 <button 
-                    onClick={() => {
-                        // Cyclic toggle for mobile convenience
-                        if(view === AppView.CHAT) setView(AppView.SHOP);
-                        else if(view === AppView.SHOP) setView(AppView.MARKETPLACE);
-                        else setView(AppView.CHAT);
-                    }}
-                    className="md:hidden px-3 py-2 bg-white/10 border border-white/20 rounded-lg text-xs font-bold"
-                 >
-                    {view === AppView.CHAT ? 'Shop' : view === AppView.SHOP ? 'Gurus' : 'Chat'}
-                 </button>
-            )}
-        </div>
-      </header>
-
-      {/* Main Content Area - Padded for Fixed Header */}
-      <main className="relative z-10 flex-1 flex flex-col max-w-5xl w-full mx-auto h-screen pt-20 md:pt-24">
-        
+      <main className={`relative z-10 flex-1 flex flex-col max-w-5xl w-full mx-auto h-screen ${userState.hasOnboarded ? 'pt-20 md:pt-24' : ''}`}>
         {!userState.hasOnboarded ? (
-            // Onboarding View
-            <div className="flex items-center justify-center h-full p-4 pb-20 overflow-y-auto">
-                <div className="bg-mystic-800/60 backdrop-blur-xl border border-white/10 p-8 rounded-3xl w-full max-w-md shadow-2xl animate-float">
-                    <div className="text-center mb-8">
-                        <div className="w-16 h-16 bg-gradient-to-br from-gold-400 to-gold-600 rounded-full mx-auto mb-4 flex items-center justify-center shadow-lg shadow-gold-500/20">
-                            <span className="text-3xl">✨</span>
-                        </div>
-                        <h2 className="text-2xl font-serif text-white mb-2">Vedic Onboarding</h2>
-                        <p className="text-mystic-300 text-sm">Enter your birth details for accurate Kundali & Vastu analysis.</p>
-                    </div>
-
-                    <form onSubmit={handleOnboardingSubmit} className="space-y-5">
-                        <div className="space-y-1">
-                            <label className="text-xs uppercase tracking-widest text-mystic-400 font-bold ml-1">Your Name</label>
-                            <input 
-                                type="text" 
-                                required
-                                value={onboardingData.name}
-                                onChange={e => setOnboardingData({...onboardingData, name: e.target.value})}
-                                className="w-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 focus:ring-1 focus:ring-gold-500/20 transition-all"
-                                placeholder="Seeker"
-                            />
-                        </div>
-
-                        <div className="space-y-1">
-                            <label className="text-xs uppercase tracking-widest text-mystic-400 font-bold ml-1">Gender</label>
-                            <select
-                                required
-                                value={onboardingData.gender}
-                                onChange={e => setOnboardingData({...onboardingData, gender: e.target.value})}
-                                className="w-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-all appearance-none cursor-pointer"
-                            >
-                                <option value="" disabled className="bg-mystic-900 text-gray-500">Select Gender</option>
-                                <option value="Male" className="bg-mystic-900">Male</option>
-                                <option value="Female" className="bg-mystic-900">Female</option>
-                                <option value="Other" className="bg-mystic-900">Other</option>
-                            </select>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-1">
-                                <label className="text-xs uppercase tracking-widest text-mystic-400 font-bold ml-1">Birth Date</label>
-                                <input 
-                                    type="date" 
-                                    required
-                                    value={onboardingData.date}
-                                    onChange={e => setOnboardingData({...onboardingData, date: e.target.value})}
-                                    className="w-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-all [color-scheme:dark]"
-                                />
-                            </div>
-                            <div className="space-y-1">
-                                <label className="text-xs uppercase tracking-widest text-mystic-400 font-bold ml-1">Time</label>
-                                <input 
-                                    type="time" 
-                                    required
-                                    value={onboardingData.time}
-                                    onChange={e => setOnboardingData({...onboardingData, time: e.target.value})}
-                                    className="w-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-all [color-scheme:dark]"
-                                />
-                            </div>
-                        </div>
-
-                        <div className="space-y-1">
-                            <label className="text-xs uppercase tracking-widest text-mystic-400 font-bold ml-1">Place of Birth</label>
-                            <input 
-                                type="text" 
-                                required
-                                value={onboardingData.place}
-                                onChange={e => setOnboardingData({...onboardingData, place: e.target.value})}
-                                className="w-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-gold-500/50 transition-all"
-                                placeholder="Mumbai, India"
-                            />
-                        </div>
-
-                        <button 
-                            type="submit"
-                            className="w-full mt-4 bg-gradient-to-r from-gold-600 to-gold-400 hover:from-gold-500 hover:to-gold-300 text-mystic-950 font-bold py-3.5 rounded-xl shadow-lg shadow-gold-500/20 transform transition-all active:scale-[0.98]"
-                        >
-                            Reveal Destiny & Vastu
-                        </button>
-                    </form>
-                </div>
-            </div>
+            <UserOnboarding onSubmit={handleOnboardingSubmit} onGuruLogin={() => { setHasStarted(true); setUserState(p=>({...p, hasOnboarded:true})); setView(AppView.ASTRO_DASHBOARD); }} />
         ) : (
-            // App Content
             <>
                 {view === AppView.ASTRO_DASHBOARD ? (
-                    <AstrologerDashboard 
-                        activeUser={userState} 
-                        messages={messages} 
-                        onAction={handleAstrologerAction} 
-                        earnings={astrologerEarnings}
-                    />
+                    <AstrologerDashboard activeUser={userState} messages={messages} onAction={handleAstrologerAction} earnings={astrologerEarnings} astrologers={astrologers} products={products} />
+                ) : view === AppView.HOROSCOPE ? (
+                    <HoroscopeView user={userState} horoscopeData={horoscopeData} isLoading={isGeneratingHoroscope} onSendYearlyReport={handleSendYearlyReport} />
                 ) : view === AppView.CHAT ? (
-                    // Chat View
                     <div className="flex flex-col h-full animate-in fade-in duration-500 relative">
-                        <div className="flex-1 overflow-y-auto scrollbar-hide pr-2 pb-48 pt-4 px-4 md:px-0">
-                            {messages.map((msg) => (
-                                <MessageBubble 
-                                    key={msg.id} 
-                                    message={msg} 
-                                    onUnlock={handleUnlockMessage}
-                                    onPay={(amount) => handleGuruDakshina(amount)}
-                                    onAcceptCall={handleAcceptCall}
-                                    onSubscribe={() => setShowPremiumModal(true)}
-                                    onBuyProduct={initiateProductPurchase}
-                                    userHasPremium={userState.isPremium}
-                                    userName={userState.name}
-                                />
-                            ))}
-                            {isLoading && (
-                                <div className="flex w-full mb-6 items-center gap-3 animate-pulse">
-                                    <div className="shrink-0 w-10 h-10 rounded-full bg-mystic-900 border border-white/20 flex items-center justify-center text-lg">
-                                        🔮
-                                    </div>
-                                    <div className="bg-mystic-800/50 px-5 py-3 rounded-2xl rounded-bl-none border border-white/5 flex items-center gap-3">
-                                        <span className="text-xs text-gold-400 font-serif tracking-widest uppercase">Consulting the stars</span>
-                                        <div className="flex gap-1 mt-1">
-                                            <span className="w-1.5 h-1.5 bg-gold-400 rounded-full animate-bounce"></span>
-                                            <span className="w-1.5 h-1.5 bg-gold-400 rounded-full animate-bounce delay-100"></span>
-                                            <span className="w-1.5 h-1.5 bg-gold-400 rounded-full animate-bounce delay-200"></span>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
+                        <div ref={chatContainerRef} onScroll={() => setShowScrollButton(chatContainerRef.current ? chatContainerRef.current.scrollHeight - chatContainerRef.current.scrollTop - chatContainerRef.current.clientHeight > 100 : false)} className="flex-1 overflow-y-auto scrollbar-hide pr-2 pb-48 pt-4 px-4 md:px-0 scroll-smooth">
+                            {messages.map((msg) => <MessageBubble key={msg.id} message={msg} onUnlock={handleUnlockMessage} onPay={(a) => handleGuruDakshina(a)} onAcceptCall={handleAcceptCall} onSubscribe={() => { setPremiumModalReason(''); setShowPremiumModal(true); }} onBuyProduct={initiateProductPurchase} userHasPremium={userState.isPremium || !!userState.isAdminImpersonating} userName={userState.name} language={userState.language || 'en'} astrologers={astrologers} />)}
+                            {isAiThinking && <ThinkingBubble />}
                             <div ref={messagesEndRef} />
                         </div>
-
-                        {/* Sticky Input Area */}
+                        {showScrollButton && <button onClick={scrollToBottom} className="fixed bottom-36 right-6 md:right-[calc(50%-20px)] md:left-auto md:translate-x-full z-40 bg-mystic-800 p-3 rounded-full border border-gold-500/30 shadow-lg text-gold-400 hover:bg-mystic-700 transition-all animate-bounce">↓</button>}
                         <div className="fixed bottom-0 left-0 w-full z-40 pointer-events-none">
                             <div className="max-w-5xl mx-auto relative px-4 pb-6 pt-4 bg-gradient-to-t from-mystic-900 via-mystic-900 to-transparent pointer-events-auto">
-                                
-                                {/* Suggested Questions */}
-                                {!isLoading && !userState.connectedAstrologerId && (
-                                    <div className="flex gap-2 overflow-x-auto scrollbar-hide mb-3 pb-1">
-                                        {SUGGESTED_QUESTIONS.map((q, i) => (
-                                            <button 
-                                                key={i}
-                                                onClick={() => handleSendMessage(q)}
-                                                className="whitespace-nowrap px-3 py-1.5 bg-mystic-800/80 hover:bg-gold-500/20 border border-mystic-600 hover:border-gold-500/50 rounded-full text-xs text-mystic-200 transition-colors"
-                                            >
-                                                ✨ {q}
-                                            </button>
-                                        ))}
-                                    </div>
+                                {!isAiThinking && !userState.connectedAstrologerId && (
+                                    <div className="flex gap-2 overflow-x-auto scrollbar-hide mb-3 pb-1">{currentSuggestions.map((q, i) => (<button key={i} onClick={() => handleSendMessage(q)} disabled={isAiThinking} className="whitespace-nowrap px-3 py-1.5 bg-mystic-800/80 hover:bg-gold-500/20 border border-mystic-600 rounded-full text-xs text-mystic-200 disabled:opacity-50 transition-colors">✨ {q}</button>))}</div>
                                 )}
-
-                                <div className="relative flex items-center bg-mystic-800/80 backdrop-blur-xl border border-mystic-600/30 rounded-full p-2 shadow-2xl">
-                                    <input
-                                        type="text"
-                                        value={input}
-                                        onChange={(e) => setInput(e.target.value)}
-                                        onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                                        placeholder={
-                                            userState.connectedAstrologerId 
-                                            ? "Message your astrologer..." 
-                                            : userState.dailyQuestionsLeft <= 0 
-                                                ? "Daily limit reached..." 
-                                                : "Ask about your career, marriage, or vastu..."
-                                        }
-                                        disabled={userState.dailyQuestionsLeft <= 0 && !userState.connectedAstrologerId}
-                                        className="flex-1 bg-transparent border-none focus:ring-0 text-white placeholder-mystic-400 px-4 py-2 font-sans text-lg outline-none"
-                                    />
-                                    <button
-                                        onClick={() => handleSendMessage()}
-                                        disabled={!input.trim() || isLoading || (userState.dailyQuestionsLeft <= 0 && !userState.connectedAstrologerId)}
-                                        className="w-12 h-12 rounded-full bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center text-white hover:shadow-lg hover:shadow-violet-500/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 transform hover:scale-105"
-                                    >
-                                        <svg className="w-6 h-6 ml-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                                        </svg>
-                                    </button>
+                                <div className="relative flex items-center bg-mystic-800/80 backdrop-blur-xl border border-mystic-600/30 rounded-full p-2 shadow-2xl gap-2">
+                                    <button onMouseDown={startRecording} className={`p-2 transition-all rounded-full ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'text-mystic-400 hover:text-white'}`}><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg></button>
+                                    <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} placeholder={userState.connectedAstrologerId ? "Message Guru..." : t.typeMessage} disabled={isAiThinking || (userState.dailyQuestionsLeft <= 0 && !userState.connectedAstrologerId && !userState.isAdminImpersonating)} className="flex-1 bg-transparent border-none focus:ring-0 text-white placeholder-mystic-400 px-2 py-2 font-sans text-lg outline-none disabled:opacity-50" />
+                                    <button onClick={() => handleSendMessage()} disabled={!input.trim() || isAiThinking} className="w-12 h-12 rounded-full bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center text-white hover:shadow-lg disabled:opacity-50 transition-all transform hover:scale-105"><svg className="w-6 h-6 ml-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg></button>
                                 </div>
-                                
-                                {/* Floating Top Bar for Zero State */}
-                                {userState.dailyQuestionsLeft <= 0 && !userState.connectedAstrologerId && (
-                                    <div className="absolute -top-4 left-0 right-0 text-center">
-                                        <span 
-                                            onClick={() => setShowPremiumModal(true)}
-                                            className="inline-block text-xs font-bold text-gold-900 bg-gold-400 px-4 py-1.5 rounded-full cursor-pointer hover:bg-gold-300 border border-gold-500/50 shadow-[0_0_15px_rgba(250,204,21,0.4)] animate-bounce"
-                                        >
-                                            {userState.isPremium ? 'Daily Limit Reached (10/10)' : 'Unlock More Questions 🔓'}
-                                        </span>
-                                    </div>
-                                )}
                             </div>
                         </div>
                     </div>
                 ) : view === AppView.MARKETPLACE ? (
-                    // Marketplace View (Astrologers)
                     <div className="flex-1 overflow-y-auto scrollbar-hide animate-in fade-in slide-in-from-right-4 duration-300 p-4 md:p-0">
-                        <div className="text-center mb-8 mt-4">
-                            <h2 className="text-3xl font-serif text-white mb-2">Vedic Gurus</h2>
-                            <p className="text-mystic-300">Consult verified astrologers for personalized remedies.</p>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-10">
-                            {MOCK_ASTROLOGERS.map(astro => (
-                                <AstroCard 
-                                    key={astro.id} 
-                                    astrologer={astro} 
-                                    onConnect={connectToAstrologer} 
-                                    connectedAstrologerId={userState.connectedAstrologerId}
-                                />
-                            ))}
-                        </div>
+                        <div className="text-center mb-8 mt-4"><h2 className="text-3xl font-serif text-white mb-2">{t.gurus}</h2><p className="text-mystic-300">Consult verified astrologers.</p></div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pb-10">{astrologers.map(astro => (<AstroCard key={astro.id} astrologer={astro} onConnect={connectToAstrologer} connectedAstrologerId={userState.connectedAstrologerId}/>))}</div>
                     </div>
-                ) : (
-                    // Shop View
-                    <Shop onBuy={initiateProductPurchase} />
-                )}
+                ) : ( <Shop products={products} onBuy={initiateProductPurchase} /> )}
             </>
         )}
       </main>
 
-      {/* Natal Chart Modal */}
-      {showChartModal && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-200">
-              <div className="bg-mystic-900 border border-gold-500/50 p-6 rounded-3xl max-w-lg w-full relative shadow-[0_0_50px_rgba(234,179,8,0.2)]">
-                  <button 
-                      onClick={() => setShowChartModal(false)}
-                      className="absolute top-4 right-4 text-mystic-500 hover:text-white"
-                  >
-                      ✕
-                  </button>
-                  <h3 className="text-xl font-serif text-white mb-6 text-center">Your Vedic Birth Chart</h3>
-                  <NatalChart 
-                      name={userState.name}
-                      date={userState.birthDate || 'Unknown'}
-                      time={userState.birthTime || 'Unknown'}
-                      place={userState.birthPlace || 'Unknown'}
-                  />
-                  <p className="text-center text-xs text-mystic-400 mt-4 italic">
-                      This chart is generated based on your birth details. Consult a Guru for a detailed reading.
-                  </p>
-              </div>
-          </div>
-      )}
-
-      {/* Tip Modal */}
-      {showTipModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-             <div className="bg-mystic-800 border border-gold-500/30 p-6 rounded-2xl w-full max-w-xs text-center shadow-2xl">
-                 <h3 className="text-gold-400 font-serif mb-4">Support the Guru</h3>
-                 <input 
-                    type="number" 
-                    value={tipAmount}
-                    onChange={(e) => setTipAmount(e.target.value)}
-                    placeholder="Enter Amount (₹)"
-                    className="w-full bg-mystic-900 border border-mystic-600 rounded-lg px-4 py-2 mb-4 text-center text-white outline-none focus:border-gold-500"
-                 />
-                 <div className="grid grid-cols-3 gap-2 mb-4">
-                    {[51, 101, 501].map(amt => (
-                        <button key={amt} onClick={() => setTipAmount(amt.toString())} className="bg-mystic-700 hover:bg-mystic-600 py-1 rounded-text-xs">
-                            ₹{amt}
-                        </button>
-                    ))}
-                 </div>
-                 <button 
-                    onClick={() => {
-                        const amt = Number(tipAmount);
-                        if(amt > 0) handleGuruDakshina(amt);
-                    }}
-                    className="w-full bg-gold-500 hover:bg-gold-400 text-mystic-900 font-bold py-2 rounded-lg"
-                 >
-                    Send Dakshina
-                 </button>
-                 <button onClick={() => setShowTipModal(false)} className="mt-3 text-xs text-mystic-500">Cancel</button>
-             </div>
-          </div>
-      )}
-
-      {/* Address & Checkout Modal */}
-      {showAddressModal && selectedProductForPurchase && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-200">
-              <div className="bg-mystic-800 border border-gold-500/30 p-6 rounded-3xl max-w-md w-full shadow-[0_0_50px_rgba(234,179,8,0.1)]">
-                  <div className="flex items-center gap-4 mb-6 pb-4 border-b border-white/5">
-                      <img src={selectedProductForPurchase.imageUrl} className="w-16 h-16 rounded-lg object-cover border border-white/10" />
-                      <div>
-                          <h3 className="text-white font-serif text-lg leading-tight">{selectedProductForPurchase.name}</h3>
-                          <p className="text-gold-400 font-bold mt-1">₹{selectedProductForPurchase.price.toLocaleString()}</p>
-                      </div>
-                  </div>
-                  
-                  <div className="space-y-3 mb-6">
-                      <h4 className="text-xs uppercase tracking-widest text-mystic-400 font-bold mb-2">Shipping Details</h4>
-                      
-                      <div className="space-y-1">
-                          <input 
-                              type="text"
-                              value={shippingDetails.address}
-                              onChange={(e) => setShippingDetails({...shippingDetails, address: e.target.value})}
-                              placeholder="Flat / House No / Street Area"
-                              className="w-full bg-mystic-900/50 border border-mystic-600 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-gold-500/50"
-                          />
-                      </div>
-                      
-                      <div className="grid grid-cols-2 gap-3">
-                          <input 
-                              type="text"
-                              value={shippingDetails.city}
-                              onChange={(e) => setShippingDetails({...shippingDetails, city: e.target.value})}
-                              placeholder="City"
-                              className="w-full bg-mystic-900/50 border border-mystic-600 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-gold-500/50"
-                          />
-                          <input 
-                              type="text"
-                              value={shippingDetails.pincode}
-                              onChange={(e) => setShippingDetails({...shippingDetails, pincode: e.target.value})}
-                              placeholder="Pincode"
-                              className="w-full bg-mystic-900/50 border border-mystic-600 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-gold-500/50"
-                          />
-                      </div>
-
-                      <div className="space-y-1 pt-1">
-                          <input 
-                              type="tel"
-                              value={shippingDetails.phone}
-                              onChange={(e) => setShippingDetails({...shippingDetails, phone: e.target.value})}
-                              placeholder="Phone Number (+91)"
-                              className="w-full bg-mystic-900/50 border border-mystic-600 rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-gold-500/50"
-                          />
-                      </div>
-                  </div>
-                  
-                  <button 
-                      onClick={confirmPurchaseWithAddress}
-                      className="w-full bg-gradient-to-r from-gold-600 to-gold-400 hover:from-gold-500 hover:to-gold-300 text-mystic-950 font-bold py-3.5 rounded-xl shadow-lg mb-3 transform transition-all active:scale-[0.98]"
-                  >
-                      Proceed to Pay
-                  </button>
-                  <button 
-                      onClick={() => {
-                          setShowAddressModal(false);
-                          setSelectedProductForPurchase(null);
-                      }}
-                      className="w-full text-mystic-500 text-sm hover:text-white transition-colors"
-                  >
-                      Cancel Order
-                  </button>
-              </div>
-          </div>
-      )}
-
-      {/* Rating Modal */}
-      {showRatingModal && ratingTarget && (
-        <RatingModal 
-            guruName={ratingTarget.name}
-            guruImage={ratingTarget.imageUrl}
-            onSubmit={handleRateGuru}
-            onSkip={() => setShowRatingModal(false)}
-        />
-      )}
-
-      {/* Premium/Unlock Modal */}
-      {showPremiumModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-gradient-to-b from-mystic-800 to-mystic-900 border border-gold-500/30 p-8 rounded-3xl max-w-md w-full text-center shadow-[0_0_50px_rgba(234,179,8,0.2)] relative overflow-hidden">
-                <button 
-                    onClick={() => setShowPremiumModal(false)}
-                    className="absolute top-4 right-4 text-mystic-400 hover:text-white"
-                >
-                    ✕
-                </button>
-
-                <div className="w-16 h-16 bg-mystic-900 rounded-full flex items-center justify-center mx-auto mb-4 border border-gold-500/50 shadow-[0_0_20px_rgba(234,179,8,0.3)]">
-                    <span className="text-3xl">✨</span>
-                </div>
-
-                <h3 className="text-2xl font-serif text-white mb-2">Align Your Stars</h3>
-                <p className="text-mystic-300 mb-6 text-sm leading-relaxed">
-                    {userState.isPremium 
-                        ? "You have reached your daily limit of 10 questions. Come back tomorrow for more guidance."
-                        : "Unlock the full prediction and remedies. Join our premium circle for 10 daily questions."}
-                </p>
-
-                {!userState.isPremium && (
-                    <div className="space-y-3">
-                        <button 
-                            onClick={() => handlePayment(299, "Monthly Subscription", () => {
-                                setUserState(prev => ({ ...prev, isPremium: true, dailyQuestionsLeft: PREMIUM_DAILY_LIMIT }));
-                                setShowPremiumModal(false);
-                            })}
-                            className="w-full group relative bg-gradient-to-r from-gold-600 to-gold-400 hover:from-gold-500 hover:to-gold-300 text-mystic-950 font-bold py-4 rounded-xl shadow-lg transform transition-all duration-200 hover:scale-[1.02]"
-                        >
-                            <span className="flex flex-col items-center">
-                                <span className="text-base">Monthly Subscription</span>
-                                <span className="text-xs opacity-80">₹299 / month (10 Q/day + Remedies)</span>
-                            </span>
-                             <div className="absolute top-0 right-0 bg-red-500 text-white text-[10px] font-bold px-2 py-1 rounded-bl-lg rounded-tr-lg">POPULAR</div>
-                        </button>
-
-                        <button 
-                            onClick={() => handlePayment(99, "One Time Question", () => {
-                                setUserState(prev => ({ ...prev, dailyQuestionsLeft: prev.dailyQuestionsLeft + 1 }));
-                                setShowPremiumModal(false);
-                            })}
-                            className="w-full bg-white/5 hover:bg-white/10 border border-white/10 text-mystic-200 font-semibold py-3 rounded-xl transition-colors"
-                        >
-                             Ask 1 Question (₹99)
-                        </button>
-                    </div>
-                )}
-                
-                {userState.isPremium && (
-                     <button 
-                        onClick={() => setShowPremiumModal(false)}
-                        className="w-full bg-mystic-700 hover:bg-mystic-600 text-white font-bold py-3 rounded-xl transition-colors"
-                     >
-                         I will wait for tomorrow
-                     </button>
-                )}
-            </div>
-        </div>
-      )}
-
-        {/* Small Astrologer Login Link (Bottom Left) */}
-        {userState.hasOnboarded && (
-            <div className="fixed bottom-2 left-2 z-50 opacity-30 hover:opacity-100 transition-opacity pointer-events-auto">
-                <button 
-                    onClick={() => setView(view === AppView.ASTRO_DASHBOARD ? AppView.CHAT : AppView.ASTRO_DASHBOARD)}
-                    className="text-[10px] text-mystic-500 hover:text-gold-400"
-                >
-                    {view === AppView.ASTRO_DASHBOARD ? "Exit" : "Guru Login"}
-                </button>
-            </div>
-        )}
+      {showPaymentConfirmation && pendingPayment && <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90"><div className="bg-mystic-800 p-8 rounded-3xl text-center"><h3 className="text-xl font-serif text-white mb-2">Confirm Payment</h3><p className="text-mystic-300 mb-6">₹{pendingPayment.amount}</p><div className="flex gap-3"><button onClick={()=>setShowPaymentConfirmation(false)} className="flex-1 bg-white/5 py-3 rounded-xl text-white">Cancel</button><button onClick={proceedToRazorpay} className="flex-1 bg-gold-500 py-3 rounded-xl text-black font-bold">Pay Now</button></div></div></div>}
+      {showChartModal && <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90"><div className="bg-mystic-900 border border-gold-500/50 p-6 rounded-3xl w-full max-w-lg relative"><button onClick={()=>setShowChartModal(false)} className="absolute top-4 right-4 text-white">✕</button><NatalChart name={userState.name} date={userState.birthDate||''} time={userState.birthTime||''} place={userState.birthPlace||''} allowDownload={true} isPremium={userState.isPremium} onUnlock={()=>{setShowChartModal(false);setShowPremiumModal(true)}}/></div></div>}
+      {showProfileModal && <ProfileModal user={userState} onSave={(u)=>setUserState(p=>({...p,...u}))} onClose={()=>setShowProfileModal(false)}/>}
+      {showTipModal && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"><div className="bg-mystic-800 p-6 rounded-2xl w-full max-w-xs text-center"><h3 className="text-gold-400 mb-4">Support Guru</h3><input type="number" value={tipAmount} onChange={e=>setTipAmount(e.target.value)} className="w-full bg-mystic-900 p-2 mb-4 text-white text-center"/><button onClick={()=>{const a=Number(tipAmount); if(a>0) handleGuruDakshina(a)}} className="w-full bg-gold-500 text-black font-bold py-2 rounded">Send</button><button onClick={()=>setShowTipModal(false)} className="mt-3 text-xs text-gray-400">Cancel</button></div></div>}
+      {showAddressModal && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90"><div className="bg-mystic-800 p-6 rounded-3xl w-full max-w-md"><h4 className="font-bold text-white mb-4">Shipping</h4><input value={shippingDetails.address} onChange={e=>setShippingDetails({...shippingDetails, address:e.target.value})} placeholder="Address" className="w-full bg-mystic-900 p-3 mb-2 text-white rounded"/><input value={shippingDetails.city} onChange={e=>setShippingDetails({...shippingDetails, city:e.target.value})} placeholder="City" className="w-full bg-mystic-900 p-3 mb-2 text-white rounded"/><button onClick={confirmPurchaseWithAddress} className="w-full bg-gold-500 text-black font-bold py-3 rounded mt-4">Proceed</button><button onClick={()=>setShowAddressModal(false)} className="w-full mt-2 text-gray-400">Cancel</button></div></div>}
+      {showRatingModal && ratingTarget && <RatingModal guruName={ratingTarget.name} guruImage={ratingTarget.imageUrl} onSubmit={()=>setShowRatingModal(false)} onSkip={()=>setShowRatingModal(false)}/>}
+      {showPremiumModal && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80"><div className="bg-mystic-800 p-8 rounded-3xl text-center"><button onClick={()=>setShowPremiumModal(false)} className="absolute top-4 right-4 text-white">✕</button><h3 className="text-2xl font-serif text-white mb-2">Unlock</h3><p className="text-gold-400 mb-4">{premiumModalReason}</p><button onClick={()=>initiatePayment(299, "Monthly", ()=>{setUserState(p=>({...p, isPremium:true, dailyQuestionsLeft:PREMIUM_DAILY_LIMIT})); setShowPremiumModal(false);})} className="w-full bg-gold-500 text-black font-bold py-4 rounded-xl mb-2">Subscribe ₹299</button><button onClick={()=>initiatePayment(99, "One Q", ()=>{setUserState(p=>({...p, dailyQuestionsLeft:p.dailyQuestionsLeft+1})); setShowPremiumModal(false);})} className="w-full bg-white/10 text-white font-bold py-3 rounded-xl">Ask 1 Q (₹99)</button></div></div>}
     </div>
   );
 }
