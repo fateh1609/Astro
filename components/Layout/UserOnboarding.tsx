@@ -14,7 +14,7 @@ export interface OnboardingData {
 }
 
 interface UserOnboardingProps {
-  onSubmit: (data: OnboardingData, wantsPremium: boolean) => void;
+  onSubmit: (data: OnboardingData, tier: 'free' | 'premium' | 'member21') => void;
   onGuruLogin?: () => void;
 }
 
@@ -167,10 +167,10 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
       setVerifiedUserId(undefined);
   };
 
-  const handleFinalSubmit = (wantsPremium: boolean) => {
+  const handleFinalSubmit = (tier: 'free' | 'premium' | 'member21') => {
     if (formData.name && formData.date) {
       // Pass the complete form data including userId
-      onSubmit({ ...formData, userId: verifiedUserId }, wantsPremium);
+      onSubmit({ ...formData, userId: verifiedUserId }, tier);
     }
   };
 
@@ -307,28 +307,47 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
   );
 
   const renderStep5 = () => (
-    <div className="space-y-6 animate-in fade-in slide-in-from-right-8 duration-500">
-        <div className="text-center mb-6">
-             <div className="w-16 h-16 bg-gradient-to-tr from-gold-400 to-yellow-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-[0_0_30px_rgba(234,179,8,0.4)] text-3xl">🔓</div>
-             <h3 className="text-2xl font-serif text-white mb-2">Final Step</h3>
-             <p className="text-mystic-300 text-sm">Choose how you want to reveal your astrological reading.</p>
+    <div className="space-y-4 animate-in fade-in slide-in-from-right-8 duration-500">
+        <div className="text-center mb-4">
+             <div className="w-16 h-16 bg-gradient-to-tr from-gold-400 to-yellow-600 rounded-full flex items-center justify-center mx-auto mb-3 shadow-[0_0_30px_rgba(234,179,8,0.4)] text-3xl">🔓</div>
+             <h3 className="text-2xl font-serif text-white mb-1">Final Step</h3>
+             <p className="text-mystic-300 text-xs">Choose how you want to reveal your astrological reading.</p>
         </div>
-        <div className="bg-gradient-to-br from-mystic-800 to-mystic-900 border border-gold-500/30 rounded-2xl p-6 relative overflow-hidden group hover:border-gold-500/50 transition-all">
-            <div className="absolute top-0 right-0 bg-gold-500 text-mystic-900 text-[10px] font-bold px-3 py-1 rounded-bl-xl uppercase tracking-wider">Recommended</div>
-            <div className="flex justify-between items-start mb-4">
-                <div><h4 className="text-lg font-bold text-white">Premium Access</h4><p className="text-gold-400 font-bold text-xl">₹299 <span className="text-xs font-normal text-mystic-400">/ month</span></p></div>
-                <div className="text-3xl">✨</div>
+        
+        {/* Premium Option */}
+        <div className="bg-gradient-to-br from-mystic-800 to-mystic-900 border border-gold-500/30 rounded-2xl p-5 relative overflow-hidden group hover:border-gold-500/50 transition-all cursor-pointer shadow-lg" onClick={() => handleFinalSubmit('premium')}>
+            <div className="absolute top-0 right-0 bg-gold-500 text-mystic-900 text-[9px] font-bold px-3 py-1 rounded-bl-xl uppercase tracking-wider">Recommended</div>
+            <div className="flex justify-between items-start mb-2">
+                <div><h4 className="text-base font-bold text-white">Premium Access</h4><p className="text-gold-400 font-bold text-lg">₹299 <span className="text-[10px] font-normal text-mystic-400">/ month</span></p></div>
+                <div className="text-2xl">✨</div>
             </div>
-            <ul className="space-y-2 mb-6 text-sm text-mystic-300">
+            <ul className="space-y-1.5 mb-4 text-xs text-mystic-300">
                 <li className="flex items-center gap-2"><span className="text-green-400">✓</span> 10 Detailed Questions Daily</li>
                 <li className="flex items-center gap-2"><span className="text-green-400">✓</span> Full Vastu Blueprints & Remedies</li>
                 <li className="flex items-center gap-2"><span className="text-green-400">✓</span> Download Natal Chart</li>
                 <li className="flex items-center gap-2"><span className="text-green-400">✓</span> Priority Instant Response</li>
             </ul>
-            <button onClick={() => handleFinalSubmit(true)} className="w-full bg-gradient-to-r from-gold-600 to-gold-400 hover:from-gold-500 hover:to-gold-300 text-mystic-900 font-bold py-3.5 rounded-xl shadow-lg transition-transform active:scale-[0.98]">Unlock Premium Now</button>
+            <button className="w-full bg-gradient-to-r from-gold-600 to-gold-400 hover:from-gold-500 hover:to-gold-300 text-mystic-950 font-bold py-2.5 rounded-xl shadow-lg text-sm transition-transform active:scale-[0.98]">Unlock Premium</button>
         </div>
-        <div className="text-center">
-            <button onClick={() => handleFinalSubmit(false)} className="text-sm text-mystic-400 hover:text-white underline decoration-mystic-600 underline-offset-4 transition-colors">Continue with Limited Free Access (1 Question)</button>
+
+        {/* Member 21 Option */}
+        <div className="bg-indigo-900/30 border border-indigo-500/40 rounded-2xl p-4 relative overflow-hidden group hover:bg-indigo-900/50 hover:border-indigo-500/60 transition-all cursor-pointer flex justify-between items-center" onClick={() => handleFinalSubmit('member21')}>
+            <div>
+                <div className="flex items-center gap-2 mb-1">
+                    <h4 className="text-sm font-bold text-indigo-100">Member 21</h4>
+                    <span className="bg-indigo-500 text-white text-[9px] px-1.5 py-0.5 rounded font-bold">3 Years</span>
+                </div>
+                <p className="text-[10px] text-indigo-300">Full Initiation Reading + Insights Dashboard</p>
+                <p className="text-[9px] text-indigo-400 mt-0.5">Pay per question after initial reading.</p>
+            </div>
+            <div className="text-right">
+                <p className="text-lg font-bold text-indigo-200 font-mono">₹21</p>
+                <button className="text-[10px] bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg mt-1 font-bold">Join</button>
+            </div>
+        </div>
+
+        <div className="text-center pt-2">
+            <button onClick={() => handleFinalSubmit('free')} className="text-xs text-mystic-500 hover:text-white underline decoration-mystic-700 underline-offset-4 transition-colors">Continue with Limited Free Access (1 Question)</button>
         </div>
     </div>
   );

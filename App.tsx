@@ -464,11 +464,30 @@ export default function App() {
       });
   };
 
-  const handleOnboardingSubmit = (data: OnboardingData, isPremium: boolean) => {
+  const handleOnboardingSubmit = (data: OnboardingData, selectedTier: 'free' | 'premium' | 'member21') => {
       const final = async () => {
           setIsGlobalLoading(true);
           try {
             const uniqueName = data.name;
+            let dailyLimit = INITIAL_DAILY_LIMIT;
+            let expiryDate: Date | undefined = undefined;
+            const isPremium = selectedTier === 'premium';
+            
+            if (selectedTier === 'premium') {
+                dailyLimit = PREMIUM_DAILY_LIMIT;
+                const now = new Date();
+                const expiry = new Date(now);
+                expiry.setMonth(expiry.getMonth() + 1);
+                expiry.setDate(expiry.getDate() - 1);
+                expiryDate = expiry;
+            } else if (selectedTier === 'member21') {
+                dailyLimit = 0; // Top-up only for chat
+                const now = new Date();
+                const expiry = new Date(now);
+                expiry.setFullYear(expiry.getFullYear() + 3);
+                expiryDate = expiry;
+            }
+
             const newUser: UserState = { 
                 ...userState, 
                 id: data.userId, 
@@ -479,19 +498,16 @@ export default function App() {
                 birthTime: data.time, 
                 birthPlace: data.place, 
                 isPremium, 
-                tier: isPremium ? 'premium' : 'free',
-                dailyQuestionsLeft: isPremium ? PREMIUM_DAILY_LIMIT : INITIAL_DAILY_LIMIT, 
-                hasOnboarded: true 
+                tier: selectedTier,
+                dailyQuestionsLeft: dailyLimit, 
+                hasOnboarded: true,
+                subscriptionExpiry: expiryDate
             };
             
-            // Calculate expiry if starting with premium
-            if (isPremium) {
-                const now = new Date();
-                const expiry = new Date(now);
-                expiry.setMonth(expiry.getMonth() + 1);
-                expiry.setDate(expiry.getDate() - 1);
-                newUser.subscriptionExpiry = expiry;
+            if (selectedTier === 'premium') {
                 addTransaction(299, 'Subscription', `Premium Activation`, newUser);
+            } else if (selectedTier === 'member21') {
+                addTransaction(21, 'Subscription', `Member 21 (3 Years)`, newUser);
             }
 
             setUserState(newUser); 
@@ -510,7 +526,7 @@ export default function App() {
                 let prompt = "Initial Overview: Name, Challenges, Vastu Hint, Warning. Deep Dive: Full Vastu.";
                 
                 // Member 21 also gets Premium Deep Dive style initiation
-                const treatAsPremium = isPremium || userState.tier === 'member21';
+                const treatAsPremium = isPremium || selectedTier === 'member21';
 
                 if (treatAsPremium) {
                     prompt = `
@@ -539,7 +555,7 @@ export default function App() {
             }).slice(0, 1);
             
             const hasDeepDive = txt.includes("Deep Dive:");
-            const shouldLock = hasDeepDive && !isPremium && userState.tier !== 'member21';
+            const shouldLock = hasDeepDive && !isPremium && selectedTier !== 'member21';
 
             setMessages([{
                 id:generateId(), 
@@ -553,7 +569,14 @@ export default function App() {
           } catch(e) { console.error(e); } 
           finally { setIsGlobalLoading(false); }
       };
-      if(isPremium) initiatePayment(299, "Premium", final, data.contact); else final();
+
+      if (selectedTier === 'premium') {
+          initiatePayment(299, "Premium Access", final, data.contact);
+      } else if (selectedTier === 'member21') {
+          initiatePayment(21, "Member 21 Initiation", final, data.contact);
+      } else {
+          final();
+      }
   };
 
   const handleLogout = () => { localStorage.removeItem('astro_token'); setHasStarted(false); setUserState({ dailyQuestionsLeft: INITIAL_DAILY_LIMIT, isPremium: false, tier: 'free', name: '', gender: '', contact: '', hasOnboarded: false, birthDate: '', birthTime: '', birthPlace: '', language: 'en' }); setMessages([]); setView(AppView.CHAT); };
