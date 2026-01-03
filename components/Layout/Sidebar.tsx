@@ -54,7 +54,8 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, user, onNavigate, on
             <div className="px-3 mb-2 text-[10px] text-mystic-500 uppercase tracking-widest font-bold">Menu</div>
             
             <SidebarItem icon="💬" label="Chat" onClick={() => onNavigate('chat')} />
-            <SidebarItem icon="🧘" label="Gurus" onClick={() => onNavigate('gurus')} />
+            <SidebarItem icon="🔮" label="Insights" onClick={() => onNavigate('horoscope')} />
+            <SidebarItem icon="🧘" label="Gurus" onClick={() => onNavigate('marketplace')} />
             <SidebarItem icon="🛍️" label="Shop" onClick={() => onNavigate('shop')} />
             
             <div className="my-4 border-t border-white/5"></div>

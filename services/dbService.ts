@@ -234,19 +234,22 @@ export const deleteProductFromDb = async (id: string) => { if(supabase) { const 
 export const fetchTransactions = async (): Promise<Transaction[]> => {
   if (!supabase) return [];
   try {
-      // Removing server-side order to prevent errors if column missing. Sorting client-side.
+      // Fetch without ordering to avoid index issues
       const { data, error } = await supabase.from('transactions').select('*');
       
       if (error) {
           console.error("DB: Error fetching transactions:", error);
           return [];
       }
-      if (!data) return [];
+      if (!data || data.length === 0) {
+          console.log("DB: No transactions found (or RLS restricted).");
+          return [];
+      }
 
       const mapped = data.map((t: any) => ({ 
           id: t.id, 
           userId: t.user_id, 
-          userName: t.user_name, 
+          userName: t.user_name || 'Anonymous', 
           amount: t.amount, 
           type: t.type, 
           status: t.status, 
@@ -255,7 +258,7 @@ export const fetchTransactions = async (): Promise<Transaction[]> => {
           _created_at: t.created_at // Keep for sorting
       }));
 
-      // Sort Descending
+      // Sort Descending client-side
       return mapped.sort((a: any, b: any) => {
           return new Date(b._created_at || 0).getTime() - new Date(a._created_at || 0).getTime();
       });
@@ -282,10 +285,9 @@ export const saveTransaction = async (tx: Transaction) => {
   } catch (e) { console.error("DB: Failed to save transaction", e); }
 };
 
-export const fetchProfiles = async () => {
+export const fetchProfiles = async (): Promise<any[]> => {
     if (!supabase) return [];
     try {
-        // Removing server-side order. Sorting client-side.
         const { data, error } = await supabase.from('profiles').select('*');
         
         if (error) {
@@ -293,10 +295,29 @@ export const fetchProfiles = async () => {
             return [];
         }
         
-        if (!data) return [];
+        if (!data || data.length === 0) {
+            console.log("DB: No profiles found (or RLS restricted).");
+            return [];
+        }
 
-        return data.sort((a: any, b: any) => {
-            return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+        // Standardize to CamelCase for App Consistency
+        const mappedUsers = data.map((u: any) => ({
+            id: u.id,
+            name: u.name || 'User',
+            contact: u.contact,
+            isPremium: !!u.is_premium,
+            tier: u.tier || 'free', // Added tier mapping
+            dailyQuestionsLeft: u.daily_questions_left || 0,
+            gender: u.gender,
+            birthDate: u.birth_date,
+            birthTime: u.birth_time,
+            birthPlace: u.birth_place,
+            createdAt: u.created_at,
+            chatHistory: u.chat_history 
+        }));
+
+        return mappedUsers.sort((a: any, b: any) => {
+            return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
         });
     } catch (e) {
         console.error("DB: Exception fetching profiles:", e);
@@ -304,7 +325,22 @@ export const fetchProfiles = async () => {
     }
 };
 
-export const updateProfile = async (id: string, updates: any) => { if(supabase) await supabase.from('profiles').update(updates).eq('id', id); };
+export const updateProfile = async (id: string, updates: any) => { 
+    if(!supabase) return;
+    
+    // Map CamelCase back to snake_case for DB
+    const dbUpdates: any = {};
+    if (updates.isPremium !== undefined) dbUpdates.is_premium = updates.isPremium;
+    if (updates.tier !== undefined) dbUpdates.tier = updates.tier; // Handle tier update
+    if (updates.dailyQuestionsLeft !== undefined) dbUpdates.daily_questions_left = updates.dailyQuestionsLeft;
+    if (updates.name !== undefined) dbUpdates.name = updates.name;
+    
+    // If explicit snake_case was passed, keep it
+    if (updates.is_premium !== undefined) dbUpdates.is_premium = updates.is_premium;
+    if (updates.daily_questions_left !== undefined) dbUpdates.daily_questions_left = updates.daily_questions_left;
+
+    await supabase.from('profiles').update(dbUpdates).eq('id', id); 
+};
 
 export const fetchUserProfile = async (contact: string | string[]): Promise<{ profile: any | null, chatHistory: Message[] }> => {
   if (!supabase) return { profile: null, chatHistory: [] };
@@ -330,6 +366,7 @@ export const fetchUserProfile = async (contact: string | string[]): Promise<{ pr
           birthTime: data.birth_time, // snake_case from DB
           birthPlace: data.birth_place, // snake_case from DB
           isPremium: data.is_premium, // snake_case from DB
+          tier: data.tier || 'free', // snake_case from DB (assuming column exists or defaulting)
           dailyQuestionsLeft: data.daily_questions_left, // snake_case from DB
           subscriptionExpiry: data.subscription_expiry ? new Date(data.subscription_expiry) : undefined, // snake_case from DB
           password: data.password 
@@ -343,7 +380,6 @@ export const fetchUserProfile = async (contact: string | string[]): Promise<{ pr
 };
 
 export const generateUniqueUsername = async (fullName: string): Promise<string> => {
-    // Return full name to respect user input. Duplicates are allowed as unique ID is handled by UUID/Contact.
     return fullName.trim();
 };
 
@@ -358,6 +394,7 @@ export const saveUserProfile = async (user: UserState, password?: string, messag
         birth_time: user.birthTime || '', // Storing as snake_case
         birth_place: user.birthPlace || '', // Storing as snake_case
         is_premium: !!user.isPremium,
+        tier: user.tier || 'free', // Store tier
         daily_questions_left: typeof user.dailyQuestionsLeft === 'number' ? user.dailyQuestionsLeft : 0,
         subscription_expiry: user.subscriptionExpiry ? user.subscriptionExpiry.toISOString() : null
       };

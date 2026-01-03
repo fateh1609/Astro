@@ -127,6 +127,7 @@ export interface UserState {
   id?: string; // UUID from DB
   dailyQuestionsLeft: number;
   isPremium: boolean;
+  tier?: 'free' | 'member21' | 'premium'; // Added tier
   name: string;
   gender?: string;
   contact?: string;

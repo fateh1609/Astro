@@ -61,7 +61,7 @@ export default function App() {
   const [isAiThinking, setIsAiThinking] = useState(false); 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
-  const [userState, setUserState] = useState<UserState>({ id: undefined, dailyQuestionsLeft: INITIAL_DAILY_LIMIT, isPremium: false, name: '', gender: '', contact: '', hasOnboarded: false, birthDate: '', birthTime: '', birthPlace: '', language: 'en' });
+  const [userState, setUserState] = useState<UserState>({ id: undefined, dailyQuestionsLeft: INITIAL_DAILY_LIMIT, isPremium: false, tier: 'free', name: '', gender: '', contact: '', hasOnboarded: false, birthDate: '', birthTime: '', birthPlace: '', language: 'en' });
   const [currentSuggestions, setCurrentSuggestions] = useState<string[]>(SUGGESTED_QUESTIONS);
   const [products, setProducts] = useState<Product[]>(MOCK_PRODUCTS); 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -160,7 +160,7 @@ export default function App() {
       const prompt = `
         Vedic Horoscope for ${userState.name} (${sign}). 
         Provide structure with Daily, Weekly, and Monthly insights.
-        Constraints: ${userState.isPremium ? 'Detailed content.' : 'BE VERY CONCISE (GIST ONLY).'} Language: ${userState.language === 'hi' ? 'HINDI' : 'ENGLISH'}.
+        Constraints: ${userState.isPremium || userState.tier === 'member21' ? 'Detailed content.' : 'BE VERY CONCISE (GIST ONLY).'} Language: ${userState.language === 'hi' ? 'HINDI' : 'ENGLISH'}.
       `;
 
       const schema: Schema = {
@@ -185,14 +185,14 @@ export default function App() {
       };
 
       try {
-          const data = await generateJsonContent(prompt, userState.isPremium ? 4000 : 2000, schema);
+          const data = await generateJsonContent(prompt, (userState.isPremium || userState.tier === 'member21') ? 4000 : 2000, schema);
           if (data && data.daily) { setHoroscopeData(data); } 
           else { setHoroscopeData({ starSign: sign, daily: { overview: "Stars are shifting.", dos: ["Meditate"], donts: ["Stress"], luckyColor: "White", luckyNumber: "7" }, weekly: "Good week ahead.", monthly: "Plan carefully." }); }
       } catch (e) { console.error(e); } finally { setIsGeneratingHoroscope(false); }
   };
 
   const handleSendYearlyReport = () => {
-      if(!userState.isPremium) { setPremiumModalReason("Yearly Reports are for Premium Members only."); setShowPremiumModal(true); return; }
+      if(!userState.isPremium && userState.tier !== 'member21') { setPremiumModalReason("Yearly Reports are for Members only."); setShowPremiumModal(true); return; }
       logCommunication('email', userState.contact || 'User', 'outbound', 'sent', 'Yearly Report 2024');
       alert(`Yearly Report has been emailed to ${userState.contact}!`);
   };
@@ -268,7 +268,7 @@ export default function App() {
     
     try {
       let apiPrompt = textToSend;
-      const isPremiumUser = userState.isPremium || !!userState.isAdminImpersonating;
+      const isPremiumUser = userState.isPremium || !!userState.isAdminImpersonating || userState.tier === 'member21';
       
       if (isPremiumUser) {
          apiPrompt = `${textToSend} (Be direct, precise, and to the point. Avoid generic fillers.)`;
@@ -304,7 +304,7 @@ export default function App() {
   const handleSeekerEnter = () => setHasStarted(true);
   const handleAdminEnter = async () => { 
       setHasStarted(true); 
-      setUserState(prev => ({ ...prev, hasOnboarded: true, name: 'Administrator', contact: 'ADMIN', isPremium: true, id: 'admin-uuid' }));
+      setUserState(prev => ({ ...prev, hasOnboarded: true, name: 'Administrator', contact: 'ADMIN', isPremium: true, tier: 'premium', id: 'admin-uuid' }));
       const token = generateJWT('ADMIN');
       localStorage.setItem('astro_token', token);
       await logCommunication('system', 'ADMIN', 'internal', 'completed', 'Admin Session Started');
@@ -317,7 +317,7 @@ export default function App() {
       try {
           const { profile, chatHistory } = await fetchUserProfile(targetUser.contact);
           if (profile) {
-              setUserState({ ...profile, id: profile.id, hasOnboarded: true, contact: profile.contact, name: profile.name, isPremium: profile.isPremium, dailyQuestionsLeft: profile.dailyQuestionsLeft, birthDate: profile.birthDate, birthTime: profile.birthTime, birthPlace: profile.birthPlace, subscriptionExpiry: profile.subscriptionExpiry, language: 'en', isAdminImpersonating: true });
+              setUserState({ ...profile, id: profile.id, hasOnboarded: true, contact: profile.contact, name: profile.name, isPremium: profile.isPremium, tier: profile.tier, dailyQuestionsLeft: profile.dailyQuestionsLeft, birthDate: profile.birthDate, birthTime: profile.birthTime, birthPlace: profile.birthPlace, subscriptionExpiry: profile.subscriptionExpiry, language: 'en', isAdminImpersonating: true });
               const instr = generateSystemInstruction(profile.name, profile.gender, profile.birthDate, profile.birthTime, profile.birthPlace, 'en');
               initializeChat(instr).then(() => { if(chatHistory.length > 0) setMessages(chatHistory); else setMessages([{ id:generateId(), text:`[ADMIN MODE] ${profile.name}`, sender:Sender.SYSTEM, timestamp:new Date() }]); });
               setView(AppView.CHAT);
@@ -340,13 +340,15 @@ export default function App() {
               // Check Subscription Expiry on Login
               let isPremium = profile.isPremium;
               let dailyQuestionsLeft = profile.dailyQuestionsLeft;
+              let tier = profile.tier || 'free';
               
-              if (isPremium && profile.subscriptionExpiry) {
+              if (profile.subscriptionExpiry) {
                   if (new Date() > new Date(profile.subscriptionExpiry)) {
                       isPremium = false;
+                      tier = 'free';
                       dailyQuestionsLeft = INITIAL_DAILY_LIMIT;
                       // Update DB about expiry
-                      saveUserProfile({ ...profile, isPremium: false, dailyQuestionsLeft: INITIAL_DAILY_LIMIT });
+                      saveUserProfile({ ...profile, isPremium: false, tier: 'free', dailyQuestionsLeft: INITIAL_DAILY_LIMIT });
                   }
               }
 
@@ -357,6 +359,7 @@ export default function App() {
                   contact: profile.contact, 
                   name: profile.name, 
                   isPremium: isPremium, 
+                  tier: tier,
                   dailyQuestionsLeft: dailyQuestionsLeft, 
                   birthDate: profile.birthDate, 
                   birthTime: profile.birthTime, 
@@ -397,9 +400,10 @@ export default function App() {
       expiry.setDate(expiry.getDate() - 1); // "Started on 2nd, ends on 1st"
 
       setUserState(prev => {
-          const updated = {
+          const updated: UserState = {
               ...prev,
               isPremium: true,
+              tier: 'premium',
               dailyQuestionsLeft: PREMIUM_DAILY_LIMIT,
               subscriptionExpiry: expiry
           };
@@ -409,6 +413,55 @@ export default function App() {
       setShowPremiumModal(false);
       addTransaction(299, 'Subscription', `Premium until ${expiry.toLocaleDateString()}`);
       setMessages(prev => [...prev, { id: generateId(), text: `Subscription Active! Valid until ${expiry.toLocaleDateString()}.`, sender: Sender.SYSTEM, timestamp: new Date() }]);
+  };
+
+  const handleMember21Purchase = () => {
+      initiatePayment(21, "Member 21 Initiation", () => {
+          const now = new Date();
+          const expiry = new Date(now);
+          expiry.setFullYear(expiry.getFullYear() + 3); // 3 Years
+
+          setUserState(prev => {
+              const updated: UserState = {
+                  ...prev,
+                  isPremium: false, // Explicitly false so premium chat limits apply
+                  tier: 'member21', // Custom tier
+                  dailyQuestionsLeft: 0, // No daily refill, only topups
+                  subscriptionExpiry: expiry
+              };
+              saveUserProfile(updated);
+              return updated;
+          });
+          setShowPremiumModal(false);
+          addTransaction(21, 'Subscription', `Member 21 (3 Years)`);
+          setMessages(prev => [...prev, { 
+              id: generateId(), 
+              text: `Welcome to the 21 Club! Insights unlocked for 3 years. Use top-ups for chat.`, 
+              sender: Sender.SYSTEM, 
+              timestamp: new Date() 
+          }]);
+      });
+  };
+
+  const handleTopup = (cost: number, quantity: number) => {
+      initiatePayment(cost, `${quantity} Questions Top-up`, () => {
+          setUserState(prev => {
+              const updated = {
+                  ...prev,
+                  dailyQuestionsLeft: (prev.dailyQuestionsLeft || 0) + quantity
+              };
+              saveUserProfile(updated);
+              return updated;
+          });
+          addTransaction(cost, 'Product', `${quantity} Q Top-up`);
+          setShowPremiumModal(false);
+          setMessages(prev => [...prev, { 
+              id: generateId(), 
+              text: `Energy restored! ${quantity} questions added (Valid for 24h).`, 
+              sender: Sender.SYSTEM, 
+              timestamp: new Date() 
+          }]);
+      });
   };
 
   const handleOnboardingSubmit = (data: OnboardingData, isPremium: boolean) => {
@@ -426,6 +479,7 @@ export default function App() {
                 birthTime: data.time, 
                 birthPlace: data.place, 
                 isPremium, 
+                tier: isPremium ? 'premium' : 'free',
                 dailyQuestionsLeft: isPremium ? PREMIUM_DAILY_LIMIT : INITIAL_DAILY_LIMIT, 
                 hasOnboarded: true 
             };
@@ -455,7 +509,10 @@ export default function App() {
             if (!txt) {
                 let prompt = "Initial Overview: Name, Challenges, Vastu Hint, Warning. Deep Dive: Full Vastu.";
                 
-                if (isPremium) {
+                // Member 21 also gets Premium Deep Dive style initiation
+                const treatAsPremium = isPremium || userState.tier === 'member21';
+
+                if (treatAsPremium) {
                     prompt = `
                     I AM A PREMIUM SEEKER. GENERATE A DIVINE, STRUCTURED ASTROLOGICAL DECREE.
                     STRICTLY FOLLOW THIS STRUCTURE:
@@ -470,7 +527,7 @@ export default function App() {
                     Deep Dive: Detailed planetary nuances.
                     `;
                 }
-                txt = await sendMessageToGemini(prompt, isPremium);
+                txt = await sendMessageToGemini(prompt, treatAsPremium);
                 if (txt && txt.length > 50) await saveCachedReading(cacheKey, txt);
             }
             
@@ -482,7 +539,7 @@ export default function App() {
             }).slice(0, 1);
             
             const hasDeepDive = txt.includes("Deep Dive:");
-            const shouldLock = hasDeepDive && !isPremium;
+            const shouldLock = hasDeepDive && !isPremium && userState.tier !== 'member21';
 
             setMessages([{
                 id:generateId(), 
@@ -499,7 +556,7 @@ export default function App() {
       if(isPremium) initiatePayment(299, "Premium", final, data.contact); else final();
   };
 
-  const handleLogout = () => { localStorage.removeItem('astro_token'); setHasStarted(false); setUserState({ dailyQuestionsLeft: INITIAL_DAILY_LIMIT, isPremium: false, name: '', gender: '', contact: '', hasOnboarded: false, birthDate: '', birthTime: '', birthPlace: '', language: 'en' }); setMessages([]); setView(AppView.CHAT); };
+  const handleLogout = () => { localStorage.removeItem('astro_token'); setHasStarted(false); setUserState({ dailyQuestionsLeft: INITIAL_DAILY_LIMIT, isPremium: false, tier: 'free', name: '', gender: '', contact: '', hasOnboarded: false, birthDate: '', birthTime: '', birthPlace: '', language: 'en' }); setMessages([]); setView(AppView.CHAT); };
   const handleLanguageChange = (lang: Language) => { setUserState(prev => ({ ...prev, language: lang })); setHoroscopeData(undefined); };
   const verifyUserCredentials = async (c: string, p: string) => { const { profile } = await fetchUserProfile([c, c.trim()]); return profile && profile.password ? await verifyPassword(p, profile.password) : false; };
   const initiatePayment = (amount: number, desc: string, success: () => void, contact?: string) => { setPendingPayment({ amount, description: desc, onSuccess: success, contact }); setShowPaymentConfirmation(true); };
@@ -530,6 +587,15 @@ export default function App() {
   const startRecording = () => { if(window.webkitSpeechRecognition) { const r = new window.webkitSpeechRecognition(); r.onresult = (e:any) => setInput(p=>p+e.results[0][0].transcript); r.start(); setIsRecording(true); r.onend=()=>setIsRecording(false); } };
   const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); };
 
+  const handleViewChange = (newView: AppView) => {
+      // Restriction Logic for Member 21
+      if (userState.tier === 'member21' && (newView === AppView.MARKETPLACE || newView === AppView.SHOP)) {
+          alert("🔒 Feature Restricted for Member 21.\nUpgrade to Premium for Guru Access and Shopping.");
+          return;
+      }
+      setView(newView);
+  };
+
   if (isGlobalLoading) return <FullScreenLoader text={loadingText} />;
   if (!hasStarted) return <LandingPage onSeekerEnter={handleSeekerEnter} onSeekerLogin={handleSeekerLogin} onVerifyCredentials={verifyUserCredentials} onGuruEnter={() => { setHasStarted(true); setUserState(p=>({...p, hasOnboarded:true})); setView(AppView.ASTRO_DASHBOARD); }} onAdminEnter={handleAdminEnter} />;
   if (view === AppView.ADMIN_DASHBOARD) return (
@@ -554,7 +620,7 @@ export default function App() {
   return (
     <div className="relative min-h-screen font-sans text-mystic-100 flex flex-col bg-mystic-900 overflow-hidden">
       <StarBackground />
-      {userState.hasOnboarded && <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} user={userState} onNavigate={(v) => { if(v==='chart') setShowChartModal(true); else setView(v as AppView); setIsSidebarOpen(false); }} onOpenProfile={() => { setShowProfileModal(true); setIsSidebarOpen(false); }} onOpenHistory={openHistory} onLogout={handleLogout} onLanguageChange={handleLanguageChange} />}
+      {userState.hasOnboarded && <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} user={userState} onNavigate={(v) => { if(v==='chart') setShowChartModal(true); else handleViewChange(v as AppView); setIsSidebarOpen(false); }} onOpenProfile={() => { setShowProfileModal(true); setIsSidebarOpen(false); }} onOpenHistory={openHistory} onLogout={handleLogout} onLanguageChange={handleLanguageChange} />}
       {showHistoryModal && <HistoryModal transactions={transactions.filter(t => t.userId === userState.contact || t.userId === userState.id)} onClose={() => setShowHistoryModal(false)} initialTab={historyTab} />}
       {callState.isActive && <CallInterface partnerName={callState.partnerName} partnerImage={callState.partnerImage} callType={callState.type} onEndCall={handleCallEnd} channelName={callState.channelName || 'default'} />}
       {userState.isAdminImpersonating && <button onClick={handleExitImpersonation} className="fixed bottom-24 right-4 z-[60] bg-orange-600 hover:bg-orange-500 text-white font-bold py-3 px-6 rounded-full shadow-2xl border-2 border-orange-400 animate-bounce">🚪 Exit Admin Mode</button>}
@@ -576,7 +642,10 @@ export default function App() {
                 {userState.connectedAstrologerId && <button onClick={disconnectAstrologer} className="bg-red-900/30 text-red-400 px-3 py-1.5 rounded-full text-xs font-bold uppercase">{t.endChat}</button>}
                 <div className="hidden md:flex bg-white/5 rounded-full p-1 border border-white/10">
                     {[AppView.CHAT, AppView.HOROSCOPE, AppView.MARKETPLACE, AppView.SHOP].map((v) => (
-                        <button key={v} onClick={() => setView(v)} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all ${view === v ? 'bg-mystic-100 text-mystic-900' : 'text-mystic-400 hover:text-white'}`}>{v === AppView.HOROSCOPE ? 'Insights' : v === AppView.CHAT ? t.chat : v === AppView.MARKETPLACE ? t.gurus : t.shop}</button>
+                        <button key={v} onClick={() => handleViewChange(v)} className={`px-4 py-1.5 rounded-full text-xs font-bold transition-all relative ${view === v ? 'bg-mystic-100 text-mystic-900' : 'text-mystic-400 hover:text-white'}`}>
+                            {userState.tier === 'member21' && (v === AppView.MARKETPLACE || v === AppView.SHOP) && <span className="absolute -top-1 -right-1 text-[8px]">🔒</span>}
+                            {v === AppView.HOROSCOPE ? 'Insights' : v === AppView.CHAT ? t.chat : v === AppView.MARKETPLACE ? t.gurus : t.shop}
+                        </button>
                     ))}
                 </div>
             </div>
@@ -595,7 +664,7 @@ export default function App() {
                 ) : view === AppView.CHAT ? (
                     <div className="flex flex-col h-full animate-in fade-in duration-500 relative">
                         <div ref={chatContainerRef} onScroll={() => setShowScrollButton(chatContainerRef.current ? chatContainerRef.current.scrollHeight - chatContainerRef.current.scrollTop - chatContainerRef.current.clientHeight > 100 : false)} className="flex-1 overflow-y-auto scrollbar-hide pr-2 pb-48 pt-4 px-4 md:px-0 scroll-smooth">
-                            {messages.map((msg) => <MessageBubble key={msg.id} message={msg} onUnlock={handleUnlockMessage} onPay={(a) => handleGuruDakshina(a)} onAcceptCall={handleAcceptCall} onSubscribe={() => { setPremiumModalReason(''); setShowPremiumModal(true); }} onBuyProduct={initiateProductPurchase} userHasPremium={userState.isPremium || !!userState.isAdminImpersonating} userName={userState.name} language={userState.language || 'en'} astrologers={astrologers} />)}
+                            {messages.map((msg) => <MessageBubble key={msg.id} message={msg} onUnlock={handleUnlockMessage} onPay={(a) => handleGuruDakshina(a)} onAcceptCall={handleAcceptCall} onSubscribe={() => { setPremiumModalReason(''); setShowPremiumModal(true); }} onBuyProduct={initiateProductPurchase} userHasPremium={userState.isPremium || !!userState.isAdminImpersonating || userState.tier === 'member21'} userName={userState.name} language={userState.language || 'en'} astrologers={astrologers} />)}
                             {isAiThinking && <ThinkingBubble />}
                             <div ref={messagesEndRef} />
                         </div>
@@ -629,7 +698,98 @@ export default function App() {
       {showTipModal && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"><div className="bg-mystic-800 p-6 rounded-2xl w-full max-w-xs text-center"><h3 className="text-gold-400 mb-4">Support Guru</h3><input type="number" value={tipAmount} onChange={e=>setTipAmount(e.target.value)} className="w-full bg-mystic-900 p-2 mb-4 text-white text-center"/><button onClick={()=>{const a=Number(tipAmount); if(a>0) handleGuruDakshina(a)}} className="w-full bg-gold-500 text-black font-bold py-2 rounded">Send</button><button onClick={()=>setShowTipModal(false)} className="mt-3 text-xs text-gray-400">Cancel</button></div></div>}
       {showAddressModal && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90"><div className="bg-mystic-800 p-6 rounded-3xl w-full max-w-md"><h4 className="font-bold text-white mb-4">Shipping</h4><input value={shippingDetails.address} onChange={e=>setShippingDetails({...shippingDetails, address:e.target.value})} placeholder="Address" className="w-full bg-mystic-900 p-3 mb-2 text-white rounded"/><input value={shippingDetails.city} onChange={e=>setShippingDetails({...shippingDetails, city:e.target.value})} placeholder="City" className="w-full bg-mystic-900 p-3 mb-2 text-white rounded"/><button onClick={confirmPurchaseWithAddress} className="w-full bg-gold-500 text-black font-bold py-3 rounded mt-4">Proceed</button><button onClick={()=>setShowAddressModal(false)} className="w-full mt-2 text-gray-400">Cancel</button></div></div>}
       {showRatingModal && ratingTarget && <RatingModal guruName={ratingTarget.name} guruImage={ratingTarget.imageUrl} onSubmit={()=>setShowRatingModal(false)} onSkip={()=>setShowRatingModal(false)}/>}
-      {showPremiumModal && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80"><div className="bg-mystic-800 p-8 rounded-3xl text-center"><button onClick={()=>setShowPremiumModal(false)} className="absolute top-4 right-4 text-white">✕</button><h3 className="text-2xl font-serif text-white mb-2">Unlock</h3><p className="text-gold-400 mb-4">{premiumModalReason}</p><button onClick={handleSubscriptionSuccess} className="w-full bg-gold-500 text-black font-bold py-4 rounded-xl mb-2">Subscribe ₹299</button><button onClick={()=>initiatePayment(99, "One Q", ()=>{setUserState(p=>({...p, dailyQuestionsLeft:p.dailyQuestionsLeft+1})); setShowPremiumModal(false);})} className="w-full bg-white/10 text-white font-bold py-3 rounded-xl">Ask 1 Q (₹99)</button></div></div>}
+      
+      {showPremiumModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-sm animate-in fade-in duration-300">
+              <div className="bg-mystic-900 border border-gold-500/30 p-6 md:p-8 rounded-3xl w-full max-w-md relative shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto">
+                  <button onClick={()=>setShowPremiumModal(false)} className="absolute top-4 right-4 text-mystic-500 hover:text-white transition-colors">✕</button>
+                  
+                  <div className="text-center mb-6">
+                      <div className="w-16 h-16 bg-gradient-to-br from-gold-400 to-amber-600 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl shadow-[0_0_20px_rgba(234,179,8,0.3)]">
+                          ⚡
+                      </div>
+                      <h3 className="text-2xl font-serif text-white mb-2">Recharge Energy</h3>
+                      <p className="text-gold-400 text-sm">{premiumModalReason || "Your daily cosmic questions are exhausted."}</p>
+                  </div>
+
+                  {/* Top-up Packs */}
+                  <div className="space-y-3 mb-6">
+                      <p className="text-[10px] text-mystic-500 uppercase tracking-widest font-bold mb-2 text-center">Instant Top-ups (Valid 24h)</p>
+                      
+                      {/* 1 for 99 */}
+                      <button 
+                          onClick={() => handleTopup(99, 1)}
+                          className="w-full bg-white/5 hover:bg-white/10 border border-white/10 hover:border-gold-500/50 p-3 rounded-xl flex justify-between items-center transition-all group"
+                      >
+                          <div className="text-left">
+                              <p className="font-bold text-white group-hover:text-gold-400">1 Question</p>
+                              <p className="text-[10px] text-mystic-400">Quick Answer</p>
+                          </div>
+                          <div className="text-right">
+                              <p className="font-mono font-bold text-white">₹99</p>
+                          </div>
+                      </button>
+
+                      {/* 5 for 259 */}
+                      <button 
+                          onClick={() => handleTopup(259, 5)}
+                          className="w-full bg-gradient-to-r from-mystic-800 to-mystic-700 border border-gold-500/50 hover:border-gold-500 p-3 rounded-xl flex justify-between items-center transition-all relative overflow-hidden group shadow-lg shadow-gold-500/10"
+                      >
+                          <div className="absolute top-0 left-0 bg-gold-500 text-mystic-900 text-[8px] font-bold px-2 py-0.5 rounded-br">BEST DEAL</div>
+                          <div className="text-left ml-2">
+                              <p className="font-bold text-white group-hover:text-gold-300">5 Questions</p>
+                              <p className="text-[10px] text-mystic-400">₹51.8 / question</p>
+                          </div>
+                          <div className="text-right">
+                              <p className="font-mono font-bold text-gold-400 text-lg">₹259</p>
+                              <p className="text-[10px] text-green-400 line-through">₹495</p>
+                          </div>
+                      </button>
+
+                      {/* 10 for 789 */}
+                      <button 
+                          onClick={() => handleTopup(789, 10)}
+                          className="w-full bg-white/5 hover:bg-white/10 border border-white/10 hover:border-gold-500/50 p-3 rounded-xl flex justify-between items-center transition-all group"
+                      >
+                          <div className="text-left">
+                              <p className="font-bold text-white group-hover:text-gold-400">10 Questions</p>
+                              <p className="text-[10px] text-mystic-400">Deep Analysis Pack</p>
+                          </div>
+                          <div className="text-right">
+                              <p className="font-mono font-bold text-white">₹789</p>
+                          </div>
+                      </button>
+                  </div>
+
+                  <div className="border-t border-white/10 pt-4">
+                      <p className="text-[10px] text-mystic-500 uppercase tracking-widest font-bold mb-3 text-center">Membership Options</p>
+                      
+                      {/* Premium */}
+                      <button onClick={handleSubscriptionSuccess} className="w-full bg-gradient-to-r from-gold-600 to-gold-400 hover:from-gold-500 hover:to-gold-300 text-mystic-950 font-bold py-4 rounded-xl mb-3 shadow-lg transition-transform active:scale-[0.98]">
+                          Subscribe Premium (₹299/mo)
+                          <span className="block text-[9px] font-medium opacity-80 mt-1">10 Qs/Day + All Features</span>
+                      </button>
+
+                      {/* Member 21 */}
+                      <button 
+                          onClick={handleMember21Purchase}
+                          className="w-full bg-indigo-900/50 hover:bg-indigo-900 border border-indigo-500/50 text-indigo-100 font-bold py-3 rounded-xl mb-2 flex items-center justify-between px-4 group transition-colors"
+                      >
+                          <div className="text-left">
+                              <div className="flex items-center gap-2">
+                                  <span>become a 21member</span>
+                                  <span className="bg-indigo-500 text-white text-[9px] px-2 py-0.5 rounded">3 Years</span>
+                              </div>
+                              <span className="block text-[9px] text-indigo-300 mt-1">Initial Reading + Full Insights Only</span>
+                          </div>
+                          <div className="text-right">
+                              <span className="text-xl font-bold font-mono">₹21</span>
+                          </div>
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
     </div>
   );
 }

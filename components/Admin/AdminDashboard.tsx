@@ -69,8 +69,31 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const removeAstro = async (id: string) => { if(window.confirm("Delete?")) await deleteAstrologer(id); };
 
   const handleEditUser = (user: any) => { setEditingUser(user); setIsUserModalOpen(true); };
-  const saveUserUpdates = async () => { if (!editingUser) return; await updateProfile(editingUser.id, { is_premium: editingUser.is_premium, daily_questions_left: editingUser.daily_questions_left, name: editingUser.name }); setIsUserModalOpen(false); };
-  const handleViewUserChat = (user: any) => { setViewingChatUser(user); if (user.chat_history) { const decrypted = decryptAndDecompress(user.chat_history); setUserChatHistory(decrypted || []); } else { setUserChatHistory([]); } setIsChatReviewOpen(true); };
+  
+  // Updated to pass camelCase properties which the service maps to snake_case
+  const saveUserUpdates = async () => { 
+      if (!editingUser) return; 
+      await updateProfile(editingUser.id, { 
+          isPremium: editingUser.isPremium, 
+          dailyQuestionsLeft: editingUser.dailyQuestionsLeft, 
+          name: editingUser.name 
+      }); 
+      setIsUserModalOpen(false); 
+  };
+  
+  const handleViewUserChat = (user: any) => { 
+      setViewingChatUser(user); 
+      // Handle both raw snake_case (legacy) or camelCase (new)
+      const rawHistory = user.chatHistory || user.chat_history;
+      
+      if (rawHistory) { 
+          const decrypted = decryptAndDecompress(rawHistory); 
+          setUserChatHistory(decrypted || []); 
+      } else { 
+          setUserChatHistory([]); 
+      } 
+      setIsChatReviewOpen(true); 
+  };
 
   const handleEditTier = (tier: SubscriptionTier) => { setEditingTier({ ...tier }); setIsTierModalOpen(true); };
   const toggleFeature = (featureId: string) => { if (!editingTier) return; const hasFeature = editingTier.featureFlags.includes(featureId); let newFlags = hasFeature ? editingTier.featureFlags.filter(f => f !== featureId) : [...editingTier.featureFlags, featureId]; setEditingTier({ ...editingTier, featureFlags: newFlags }); };
@@ -152,7 +175,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const renderSeekers = () => {
       const filtered = users.filter(u => {
           const matchName = u.name?.toLowerCase().includes(searchTerm.toLowerCase()) || u.contact?.includes(searchTerm);
-          const matchStatus = filterStatus === 'all' ? true : filterStatus === 'premium' ? u.is_premium : !u.is_premium;
+          // Standardized to CamelCase "isPremium" from dbService
+          const matchStatus = filterStatus === 'all' ? true : filterStatus === 'premium' ? u.isPremium : !u.isPremium;
           return matchName && matchStatus;
       });
 
@@ -197,16 +221,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     </div>
                                 </td>
                                 <td className="px-6 py-4">
-                                     {user.is_premium ? 
+                                     {/* Use standardized CamelCase property */}
+                                     {user.isPremium ? 
                                         <span className="bg-gold-500/20 text-gold-400 px-2 py-1 rounded text-[10px] font-bold border border-gold-500/30 uppercase tracking-wide">PREMIUM</span> 
                                         : <span className="bg-mystic-800 text-mystic-400 px-2 py-1 rounded text-[10px] uppercase tracking-wide">Free Plan</span>
                                      }
                                 </td>
                                 <td className="px-6 py-4 text-mystic-300">
-                                    <span className="font-mono text-white">{user.daily_questions_left}</span> <span className="text-xs">Qs/Day</span>
+                                    <span className="font-mono text-white">{user.dailyQuestionsLeft}</span> <span className="text-xs">Qs/Day</span>
                                 </td>
                                 <td className="px-6 py-4 text-mystic-500 text-xs">
-                                    {new Date(user.created_at || Date.now()).toLocaleDateString()}
+                                    {new Date(user.createdAt || Date.now()).toLocaleDateString()}
                                 </td>
                                 <td className="px-6 py-4">
                                     <div className="flex justify-center gap-2">
@@ -220,7 +245,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </tbody>
                  </table>
              </div>
-             {filtered.length === 0 && <div className="p-8 text-center text-mystic-500 italic">No users found matching filters.</div>}
+             {filtered.length === 0 && (
+                 <div className="p-8 text-center text-mystic-500 flex flex-col items-center">
+                     <span className="text-2xl mb-2">⚠️</span>
+                     <p className="italic">No users found.</p>
+                     <p className="text-xs mt-2 opacity-50">If users exist in DB, ensure RLS policies allow reading 'profiles'.</p>
+                 </div>
+             )}
           </div>
       </div>
       );
@@ -471,6 +502,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     </tbody>
                                 </table>
                              </div>
+                             {transactions.length === 0 && (
+                                <div className="p-8 text-center text-mystic-500 flex flex-col items-center">
+                                    <span className="text-2xl mb-2">⚠️</span>
+                                    <p className="italic">No transactions found.</p>
+                                    <p className="text-xs mt-2 opacity-50">Ensure 'transactions' table RLS policies allow reading.</p>
+                                </div>
+                             )}
                         </div>
                     </div>
                 )}
