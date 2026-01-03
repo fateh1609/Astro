@@ -352,13 +352,10 @@ export const updateProfile = async (id: string, updates: any) => {
     if (updates.dailyQuestionsLeft !== undefined) dbUpdates.daily_questions_left = updates.dailyQuestionsLeft;
     if (updates.name !== undefined) dbUpdates.name = updates.name;
     
-    // NOTE: 'tier' column might not exist in user's schema.
-    // We do NOT send 'tier' to the DB to avoid errors.
-    // Instead we ensure is_premium and logic persists via saveUserProfile logic mostly.
-    // But for admin updates, we might need to be careful.
-    
-    if (updates.is_premium !== undefined) dbUpdates.is_premium = updates.is_premium;
-    if (updates.daily_questions_left !== undefined) dbUpdates.daily_questions_left = updates.daily_questions_left;
+    // Handle Subscription Expiry update (crucial for Tier management)
+    if (updates.subscriptionExpiry !== undefined) dbUpdates.subscription_expiry = updates.subscriptionExpiry;
+    // Allow direct snake_case passing too
+    if (updates.subscription_expiry !== undefined) dbUpdates.subscription_expiry = updates.subscription_expiry;
 
     await supabase.from('profiles').update(dbUpdates).eq('id', id); 
 };

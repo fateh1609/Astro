@@ -70,16 +70,46 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleEditUser = (user: any) => { setEditingUser(user); setIsUserModalOpen(true); };
   
-  // Updated to pass camelCase properties which the service maps to snake_case
+  // Enhanced User Save with Tier Logic
   const saveUserUpdates = async () => { 
       if (!editingUser) return; 
-      await updateProfile(editingUser.id, { 
-          isPremium: editingUser.isPremium,
-          tier: editingUser.tier, // Ensure tier is saved to DB
-          dailyQuestionsLeft: editingUser.dailyQuestionsLeft, 
-          name: editingUser.name 
-      }); 
+      
+      const updates: any = {
+          name: editingUser.name,
+          dailyQuestionsLeft: editingUser.dailyQuestionsLeft,
+          isPremium: editingUser.isPremium
+      };
+
+      // Critical: Set Expiry based on Tier to ensure persistence even without 'tier' column
+      if (editingUser.tier === 'member21') {
+          updates.isPremium = false; // Member 21 is not "Daily Refill Premium"
+          if (!editingUser.subscriptionExpiry) {
+              const d = new Date();
+              d.setFullYear(d.getFullYear() + 3);
+              updates.subscriptionExpiry = d.toISOString();
+          } else {
+              updates.subscriptionExpiry = editingUser.subscriptionExpiry;
+          }
+      } else if (editingUser.tier === 'premium') {
+          updates.isPremium = true;
+          if (!editingUser.subscriptionExpiry) {
+              const d = new Date();
+              d.setMonth(d.getMonth() + 1);
+              updates.subscriptionExpiry = d.toISOString();
+          } else {
+              updates.subscriptionExpiry = editingUser.subscriptionExpiry;
+          }
+      } else {
+          // Free
+          updates.isPremium = false;
+          // Don't clear expiry, just let it expire or set to null?
+          // Setting to null removes member status effectively.
+          updates.subscriptionExpiry = null;
+      }
+
+      await updateProfile(editingUser.id, updates); 
       setIsUserModalOpen(false); 
+      if (onRefresh) onRefresh(); // Trigger refresh to show new status
   };
   
   const handleViewUserChat = (user: any) => { 
@@ -100,8 +130,35 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const toggleFeature = (featureId: string) => { if (!editingTier) return; const hasFeature = editingTier.featureFlags.includes(featureId); let newFlags = hasFeature ? editingTier.featureFlags.filter(f => f !== featureId) : [...editingTier.featureFlags, featureId]; setEditingTier({ ...editingTier, featureFlags: newFlags }); };
   const saveTierUpdates = () => { if (!editingTier) return; setTiers(prev => prev.map(t => t.id === editingTier.id ? editingTier : t)); setIsTierModalOpen(false); };
 
+  // Handle Tier Change in Modal to set defaults
+  const handleUserTierChange = (newTier: string) => {
+      let newData = { ...editingUser, tier: newTier };
+      
+      if (newTier === 'member21') {
+          newData.isPremium = false;
+          newData.dailyQuestionsLeft = 0; // Member 21 starts with 0 (Top-up model)
+          const d = new Date();
+          d.setFullYear(d.getFullYear() + 3);
+          newData.subscriptionExpiry = d.toISOString();
+      } else if (newTier === 'premium') {
+          newData.isPremium = true;
+          newData.dailyQuestionsLeft = 10;
+          const d = new Date();
+          d.setMonth(d.getMonth() + 1);
+          newData.subscriptionExpiry = d.toISOString();
+      } else {
+          newData.isPremium = false;
+          newData.dailyQuestionsLeft = 1;
+          newData.subscriptionExpiry = null;
+      }
+      setEditingUser(newData);
+  };
+
   const renderOverview = () => {
       const totalRevenue = transactions.reduce((sum, t) => sum + t.amount, 0);
+      const member21Count = users.filter(u => u.tier === 'member21').length;
+      const premiumCount = users.filter(u => u.isPremium && u.tier !== 'member21').length;
+
       return (
           <div className="space-y-6 animate-in fade-in">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -124,10 +181,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <p className="text-3xl font-serif text-white font-bold">{astrologers.filter(a => a.isOnline).length} / {astrologers.length}</p>
                   </div>
 
-                  <div className="bg-gradient-to-br from-mystic-800 to-mystic-900 p-6 rounded-2xl border border-white/5 shadow-lg relative overflow-hidden">
-                      <div className="absolute top-0 right-0 p-4 opacity-10 text-6xl">📦</div>
-                      <h3 className="text-mystic-400 uppercase tracking-widest text-xs font-bold mb-2">Products</h3>
-                      <p className="text-3xl font-serif text-white font-bold">{products.length}</p>
+                  <div className="bg-gradient-to-br from-indigo-900 to-mystic-900 p-6 rounded-2xl border border-indigo-500/30 shadow-lg relative overflow-hidden">
+                      <div className="absolute top-0 right-0 p-4 opacity-10 text-6xl">👑</div>
+                      <h3 className="text-indigo-300 uppercase tracking-widest text-xs font-bold mb-2">Members</h3>
+                      <div className="flex gap-4">
+                          <div>
+                              <p className="text-2xl font-serif text-white font-bold">{member21Count}</p>
+                              <p className="text-[10px] text-indigo-400 uppercase">Member 21</p>
+                          </div>
+                          <div className="h-8 w-px bg-white/10"></div>
+                          <div>
+                              <p className="text-2xl font-serif text-white font-bold">{premiumCount}</p>
+                              <p className="text-[10px] text-gold-400 uppercase">Premium</p>
+                          </div>
+                      </div>
                   </div>
               </div>
 
@@ -177,7 +244,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const filtered = users.filter(u => {
           const matchName = u.name?.toLowerCase().includes(searchTerm.toLowerCase()) || u.contact?.includes(searchTerm);
           // Standardized to CamelCase "isPremium" from dbService
-          const matchStatus = filterStatus === 'all' ? true : filterStatus === 'premium' ? u.isPremium : !u.isPremium;
+          let matchStatus = true;
+          if (filterStatus === 'premium') matchStatus = u.isPremium;
+          else if (filterStatus === 'member21') matchStatus = u.tier === 'member21';
+          else if (filterStatus === 'free') matchStatus = !u.isPremium && u.tier !== 'member21';
+          
           return matchName && matchStatus;
       });
 
@@ -189,9 +260,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                  <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="bg-mystic-900 border border-mystic-700 rounded-lg px-3 py-2 text-sm text-white outline-none">
                      <option value="all">All Users</option>
                      <option value="premium">Premium Only</option>
+                     <option value="member21">Member 21</option>
                      <option value="free">Free Only</option>
                  </select>
-                 <input type="text" placeholder="Search users..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-mystic-900 border border-mystic-700 rounded-lg px-4 py-2 text-sm text-white w-full md:w-64 outline-none" />
+                 <input type="text" placeholder="Search by Name/Phone..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="bg-mystic-900 border border-mystic-700 rounded-lg px-4 py-2 text-sm text-white w-full md:w-64 outline-none" />
             </div>
           </div>
           
@@ -201,10 +273,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <thead className="bg-mystic-800 text-mystic-400 uppercase text-xs font-bold border-b border-white/5">
                         <tr>
                             <th className="px-6 py-4">User</th>
-                            <th className="px-6 py-4">Status</th>
-                            <th className="px-6 py-4">Tier</th>
+                            <th className="px-6 py-4">Plan Status</th>
+                            <th className="px-6 py-4">Expiry</th>
                             <th className="px-6 py-4">Daily Limit</th>
-                            <th className="px-6 py-4">Created</th>
+                            <th className="px-6 py-4">Joined</th>
                             <th className="px-6 py-4 text-center">Actions</th>
                         </tr>
                     </thead>
@@ -223,13 +295,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     </div>
                                 </td>
                                 <td className="px-6 py-4">
-                                     {user.isPremium ? 
+                                     {user.tier === 'member21' ? (
+                                        <span className="bg-indigo-500/20 text-indigo-300 px-2 py-1 rounded text-[10px] font-bold border border-indigo-500/30 uppercase tracking-wide">MEMBER 21</span>
+                                     ) : user.isPremium ? (
                                         <span className="bg-gold-500/20 text-gold-400 px-2 py-1 rounded text-[10px] font-bold border border-gold-500/30 uppercase tracking-wide">PREMIUM</span> 
-                                        : <span className="bg-mystic-800 text-mystic-400 px-2 py-1 rounded text-[10px] uppercase tracking-wide">Free Plan</span>
-                                     }
+                                     ) : (
+                                        <span className="bg-mystic-800 text-mystic-400 px-2 py-1 rounded text-[10px] uppercase tracking-wide">FREE</span>
+                                     )}
                                 </td>
-                                <td className="px-6 py-4 text-xs font-mono text-indigo-300 uppercase">
-                                    {user.tier || 'free'}
+                                <td className="px-6 py-4 text-xs font-mono text-mystic-300">
+                                    {user.subscriptionExpiry ? new Date(user.subscriptionExpiry).toLocaleDateString() : 'N/A'}
                                 </td>
                                 <td className="px-6 py-4 text-mystic-300">
                                     <span className="font-mono text-white">{user.dailyQuestionsLeft}</span> <span className="text-xs">Qs/Day</span>
@@ -253,7 +328,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                  <div className="p-8 text-center text-mystic-500 flex flex-col items-center">
                      <span className="text-2xl mb-2">⚠️</span>
                      <p className="italic">No users found.</p>
-                     <p className="text-xs mt-2 opacity-50">If users exist in DB, ensure RLS policies allow reading 'profiles'.</p>
+                     <p className="text-xs mt-2 opacity-50">Try a different search or filter.</p>
                  </div>
              )}
           </div>
@@ -521,32 +596,52 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         {isTierModalOpen && editingTier && ( <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4"><div className="bg-mystic-800 p-6 rounded-2xl w-full max-w-md"><h3 className="text-xl font-bold mb-4 text-white">Edit Tier: {editingTier.name}</h3><div className="space-y-2 mb-4">{AVAILABLE_FEATURES.map(f=>(<div key={f.id} onClick={()=>toggleFeature(f.id)} className={`p-2 border rounded cursor-pointer transition-colors ${editingTier.featureFlags.includes(f.id)?'bg-gold-500 text-black border-gold-500':'border-white/20 text-mystic-300 hover:bg-white/5'}`}>{f.label}</div>))}</div><button onClick={saveTierUpdates} className="bg-white/10 hover:bg-white/20 text-white w-full py-2 rounded transition-colors">Save</button></div></div> )}
         
-        {/* EDIT USER MODAL - Updated with Tier Selection */}
+        {/* EDIT USER MODAL - Fully Updated */}
         {isUserModalOpen && editingUser && ( 
             <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4">
-                <div className="bg-mystic-800 p-6 rounded-2xl w-full max-w-md">
-                    <h3 className="text-white font-bold mb-4">Edit User</h3>
+                <div className="bg-mystic-800 p-6 rounded-2xl w-full max-w-md border border-white/10 shadow-2xl">
+                    <h3 className="text-white font-bold mb-4 text-lg">Manage User</h3>
                     
-                    <label className="text-[10px] uppercase text-mystic-400 font-bold block mb-1">Display Name</label>
-                    <input value={editingUser.name} onChange={e=>setEditingUser({...editingUser, name:e.target.value})} className="w-full bg-mystic-900 border border-white/10 p-2 mb-4 rounded text-white"/>
-                    
-                    <label className="text-[10px] uppercase text-mystic-400 font-bold block mb-1">Subscription Tier</label>
-                    <select 
-                        value={editingUser.tier || 'free'} 
-                        onChange={e => setEditingUser({...editingUser, tier: e.target.value, isPremium: e.target.value === 'premium' })}
-                        className="w-full bg-mystic-900 border border-white/10 p-2 mb-4 rounded text-white"
-                    >
-                        <option value="free">Free</option>
-                        <option value="premium">Premium</option>
-                        <option value="member21">Member 21</option>
-                    </select>
+                    <div className="space-y-4">
+                        <div>
+                            <label className="text-[10px] uppercase text-mystic-400 font-bold block mb-1">Display Name</label>
+                            <input value={editingUser.name} onChange={e=>setEditingUser({...editingUser, name:e.target.value})} className="w-full bg-mystic-900 border border-white/10 p-2 rounded text-white text-sm"/>
+                        </div>
 
-                    <label className="text-[10px] uppercase text-mystic-400 font-bold block mb-1">Daily Limit</label>
-                    <input type="number" value={editingUser.dailyQuestionsLeft} onChange={e=>setEditingUser({...editingUser, dailyQuestionsLeft: parseInt(e.target.value)})} className="w-full bg-mystic-900 border border-white/10 p-2 mb-4 rounded text-white"/>
+                        <div>
+                            <label className="text-[10px] uppercase text-mystic-400 font-bold block mb-1">Subscription Plan</label>
+                            <select 
+                                value={editingUser.tier || 'free'} 
+                                onChange={e => handleUserTierChange(e.target.value)}
+                                className="w-full bg-mystic-900 border border-white/10 p-2 rounded text-white text-sm"
+                            >
+                                <option value="free">Free</option>
+                                <option value="premium">Premium Plan</option>
+                                <option value="member21">Member 21 (3-Year)</option>
+                            </select>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="text-[10px] uppercase text-mystic-400 font-bold block mb-1">Daily Qs Limit</label>
+                                <input type="number" value={editingUser.dailyQuestionsLeft} onChange={e=>setEditingUser({...editingUser, dailyQuestionsLeft: parseInt(e.target.value)})} className="w-full bg-mystic-900 border border-white/10 p-2 rounded text-white text-sm"/>
+                            </div>
+                            <div>
+                                <label className="text-[10px] uppercase text-mystic-400 font-bold block mb-1">Expiry Date</label>
+                                <input 
+                                    type="date" 
+                                    value={editingUser.subscriptionExpiry ? new Date(editingUser.subscriptionExpiry).toISOString().split('T')[0] : ''} 
+                                    onChange={e=>setEditingUser({...editingUser, subscriptionExpiry: new Date(e.target.value).toISOString()})} 
+                                    className="w-full bg-mystic-900 border border-white/10 p-2 rounded text-white text-sm [color-scheme:dark]"
+                                    disabled={!editingUser.subscriptionExpiry}
+                                />
+                            </div>
+                        </div>
+                    </div>
                     
-                    <div className="flex gap-2 justify-end">
-                        <button onClick={()=>setIsUserModalOpen(false)} className="text-xs text-mystic-400 hover:text-white px-3">Cancel</button>
-                        <button onClick={saveUserUpdates} className="bg-gold-500 hover:bg-gold-400 px-4 py-2 rounded text-black font-bold transition-colors">Save Changes</button>
+                    <div className="flex gap-2 justify-end mt-6 pt-4 border-t border-white/10">
+                        <button onClick={()=>setIsUserModalOpen(false)} className="text-xs text-mystic-400 hover:text-white px-4 py-2">Cancel</button>
+                        <button onClick={saveUserUpdates} className="bg-gold-500 hover:bg-gold-400 px-4 py-2 rounded text-black font-bold text-sm transition-colors shadow-lg shadow-gold-500/20">Save Changes</button>
                     </div>
                 </div>
             </div> 
