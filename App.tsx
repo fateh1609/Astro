@@ -698,9 +698,26 @@ export default function App() {
                                     <div className="flex gap-2 overflow-x-auto scrollbar-hide mb-3 pb-1">{currentSuggestions.map((q, i) => (<button key={i} onClick={() => handleSendMessage(q)} disabled={isAiThinking} className="whitespace-nowrap px-3 py-1.5 bg-mystic-800/80 hover:bg-gold-500/20 border border-mystic-600 rounded-full text-xs text-mystic-200 disabled:opacity-50 transition-colors">✨ {q}</button>))}</div>
                                 )}
                                 <div className="relative flex items-center bg-mystic-800/80 backdrop-blur-xl border border-mystic-600/30 rounded-full p-2 shadow-2xl gap-2">
-                                    <button onMouseDown={startRecording} className={`p-2 transition-all rounded-full ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'text-mystic-400 hover:text-white'}`}><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg></button>
-                                    <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} placeholder={userState.connectedAstrologerId ? "Message Guru..." : t.typeMessage} disabled={isAiThinking || (userState.dailyQuestionsLeft <= 0 && !userState.connectedAstrologerId && !userState.isAdminImpersonating)} className="flex-1 bg-transparent border-none focus:ring-0 text-white placeholder-mystic-400 px-2 py-2 font-sans text-lg outline-none disabled:opacity-50" />
-                                    <button onClick={() => handleSendMessage()} disabled={!input.trim() || isAiThinking} className="w-12 h-12 rounded-full bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center text-white hover:shadow-lg disabled:opacity-50 transition-all transform hover:scale-105"><svg className="w-6 h-6 ml-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg></button>
+                                    {(userState.dailyQuestionsLeft <= 0 && !userState.connectedAstrologerId && !userState.isAdminImpersonating) ? (
+                                        <button 
+                                            onClick={() => { 
+                                                setPremiumModalReason('Recharge to continue chatting.'); 
+                                                setShowPremiumModal(true); 
+                                            }}
+                                            className="flex-1 flex items-center justify-between bg-mystic-800/80 border border-red-500/30 rounded-full p-2 pl-4 cursor-pointer hover:bg-mystic-800 transition-all group w-full"
+                                        >
+                                           <span className="text-gray-400 text-sm font-medium">Daily limit reached...</span>
+                                           <span className="bg-gold-500 text-mystic-900 font-bold text-xs px-4 py-2 rounded-full group-hover:bg-gold-400 transition-colors shadow-lg shadow-gold-500/20">
+                                              Recharge / Upgrade
+                                           </span>
+                                        </button>
+                                    ) : (
+                                        <>
+                                            <button onMouseDown={startRecording} className={`p-2 transition-all rounded-full ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'text-mystic-400 hover:text-white'}`}><svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg></button>
+                                            <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} placeholder={userState.connectedAstrologerId ? "Message Guru..." : t.typeMessage} disabled={isAiThinking} className="flex-1 bg-transparent border-none focus:ring-0 text-white placeholder-mystic-400 px-2 py-2 font-sans text-lg outline-none disabled:opacity-50" />
+                                            <button onClick={() => handleSendMessage()} disabled={!input.trim() || isAiThinking} className="w-12 h-12 rounded-full bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center text-white hover:shadow-lg disabled:opacity-50 transition-all transform hover:scale-105"><svg className="w-6 h-6 ml-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg></button>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -794,21 +811,36 @@ export default function App() {
                       </button>
 
                       {/* Member 21 */}
-                      <button 
-                          onClick={handleMember21Purchase}
-                          className="w-full bg-indigo-900/50 hover:bg-indigo-900 border border-indigo-500/50 text-indigo-100 font-bold py-3 rounded-xl mb-2 flex items-center justify-between px-4 group transition-colors"
-                      >
-                          <div className="text-left">
-                              <div className="flex items-center gap-2">
-                                  <span>become a 21member</span>
-                                  <span className="bg-indigo-500 text-white text-[9px] px-2 py-0.5 rounded">3 Years</span>
+                      {userState.tier === 'member21' ? (
+                          <div className="w-full bg-gradient-to-r from-indigo-900/40 to-mystic-800 border border-indigo-500/50 p-4 rounded-xl mb-2 flex items-center justify-between shadow-lg">
+                              <div>
+                                  <div className="flex items-center gap-2 mb-1">
+                                      <span className="text-green-400 font-bold text-lg">✓</span>
+                                      <span className="text-white font-bold text-sm">Member 21 Active</span>
+                                  </div>
+                                  <p className="text-[10px] text-indigo-300">Plan active until {userState.subscriptionExpiry?.getFullYear()}</p>
                               </div>
-                              <span className="block text-[9px] text-indigo-300 mt-1">Initial Reading + Full Insights Only</span>
+                              <div className="text-right">
+                                   <span className="text-[10px] bg-indigo-500/20 text-indigo-300 px-2 py-1 rounded border border-indigo-500/30 uppercase tracking-widest font-bold">Current Tier</span>
+                              </div>
                           </div>
-                          <div className="text-right">
-                              <span className="text-xl font-bold font-mono">₹21</span>
-                          </div>
-                      </button>
+                      ) : (
+                          <button 
+                              onClick={handleMember21Purchase}
+                              className="w-full bg-indigo-900/50 hover:bg-indigo-900 border border-indigo-500/50 text-indigo-100 font-bold py-3 rounded-xl mb-2 flex items-center justify-between px-4 group transition-colors"
+                          >
+                              <div className="text-left">
+                                  <div className="flex items-center gap-2">
+                                      <span>become a 21member</span>
+                                      <span className="bg-indigo-500 text-white text-[9px] px-2 py-0.5 rounded">3 Years</span>
+                                  </div>
+                                  <span className="block text-[9px] text-indigo-300 mt-1">Initial Reading + Full Insights Only</span>
+                              </div>
+                              <div className="text-right">
+                                  <span className="text-xl font-bold font-mono">₹21</span>
+                              </div>
+                          </button>
+                      )}
                   </div>
               </div>
           </div>

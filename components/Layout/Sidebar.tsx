@@ -36,7 +36,9 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, user, onNavigate, on
             </div>
             <div>
               <h3 className="font-serif font-bold text-white text-lg leading-tight line-clamp-1">{displayName}</h3>
-              <p className="text-xs text-gold-400 font-medium uppercase tracking-wider">{user.isPremium ? 'Premium Member' : 'Free Plan'}</p>
+              <p className="text-xs text-gold-400 font-medium uppercase tracking-wider">
+                {user.tier === 'member21' ? '21 Member' : user.isPremium ? 'Premium Member' : 'Free Plan'}
+              </p>
             </div>
           </div>
           <div className="flex gap-2">
