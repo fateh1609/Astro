@@ -73,17 +73,23 @@ export const sendMessageToGemini = async (message: string, isPremium: boolean = 
   // We now require full Deep Dive content for all users (to support unlock feature),
   // so we do not strip the request for free users.
   // The system instruction enforces the structure "Gist ... Deep Dive: ..."
-  const enhancedMessage = message;
+  let apiPrompt = message;
+  
+  if (isPremium) {
+     apiPrompt = `${message} 
+     
+     [PREMIUM REQUEST]: Provide a rich, detailed 'Deep Dive' section. Include specific planetary alignments, Dasha implications, and concrete remedies. Be precise and avoid vague spiritual platitudes. Focus on actionable astrological data.`;
+  }
 
   while (attempt < maxRetries) {
     try {
       const result = await chatSession.sendMessage({
-        message: enhancedMessage
+        message: apiPrompt
       });
       const responseText = result.text || "The stars are clouded...";
       
       // Log DB Usage
-      trackUsageToDb(enhancedMessage, responseText, 'chat');
+      trackUsageToDb(apiPrompt, responseText, 'chat');
       
       return responseText;
     } catch (error: any) {

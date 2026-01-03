@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Sender, Message, UserState, AppView, Astrologer, MessageType, CallState, Product, Earnings, Transaction, HoroscopeData, Language } from './types';
+import { Sender, Message, UserState, AppView, Astrologer, MessageType, CallState, Product, Earnings, Transaction, HoroscopeData, Language, CommunicationLog } from './types';
 import { INITIAL_DAILY_LIMIT, PREMIUM_DAILY_LIMIT, generateSystemInstruction, SUGGESTED_QUESTIONS, TOPIC_QUESTIONS, RAZORPAY_KEY_ID, TRANSLATIONS, MOCK_PRODUCTS, MOCK_ASTROLOGERS, formatDisplayName } from './constants';
 import { initializeChat, sendMessageToGemini, generateJsonContent } from './services/geminiService';
-import { fetchProducts, fetchTransactions, saveTransaction, fetchUserProfile, saveUserProfile, seedDatabase, fetchAstrologers, subscribeToTable, logCommunication, generateUniqueUsername, generateReferenceId, fetchCachedReading, saveCachedReading } from './services/dbService';
+import { fetchProducts, fetchTransactions, saveTransaction, fetchUserProfile, saveUserProfile, seedDatabase, fetchAstrologers, subscribeToTable, logCommunication, generateUniqueUsername, generateReferenceId, fetchCachedReading, saveCachedReading, fetchProfiles, fetchCommunicationLogs } from './services/dbService';
 import { verifyPassword, generateJWT, verifyJWT } from './services/securityService';
 import StarBackground from './components/Layout/StarBackground';
 import MessageBubble from './components/Chat/MessageBubble';
@@ -66,6 +66,8 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>(MOCK_PRODUCTS); 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [astrologers, setAstrologers] = useState<Astrologer[]>(MOCK_ASTROLOGERS);
+  const [users, setUsers] = useState<any[]>([]);
+  const [commLogs, setCommLogs] = useState<CommunicationLog[]>([]);
   const [astrologerEarnings, setAstrologerEarnings] = useState<Record<string, Earnings>>({});
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -104,19 +106,26 @@ export default function App() {
             const params = new URLSearchParams(window.location.search);
             const shouldSeed = params.get('seed') === 'true';
             
-            // If ?seed=true, we attempt to seed even if data might exist (depends on dbService implementation)
             if (shouldSeed) {
               console.log("Manual seeding triggered via URL...");
-              // Pass a force flag if needed, or rely on dbService check
               await seedDatabase();
             } else {
               await seedDatabase();
             }
             
-            const [dbProducts, dbTransactions, dbAstrologers] = await Promise.all([fetchProducts(), fetchTransactions(), fetchAstrologers()]);
+            const [dbProducts, dbTransactions, dbAstrologers, dbUsers, dbLogs] = await Promise.all([
+                fetchProducts(), 
+                fetchTransactions(), 
+                fetchAstrologers(),
+                fetchProfiles(),
+                fetchCommunicationLogs()
+            ]);
+            
             if (dbProducts.length > 0) setProducts(dbProducts);
             if (dbTransactions.length > 0) setTransactions(dbTransactions);
             if (dbAstrologers.length > 0) setAstrologers(dbAstrologers);
+            if (dbUsers.length > 0) setUsers(dbUsers);
+            if (dbLogs.length > 0) setCommLogs(dbLogs);
             
         } catch (e) { console.error(e); } finally { setTimeout(() => setIsGlobalLoading(false), 800); }
     };
@@ -124,7 +133,16 @@ export default function App() {
     const subProducts = subscribeToTable('products', () => fetchProducts().then(setProducts));
     const subTransactions = subscribeToTable('transactions', () => fetchTransactions().then(setTransactions));
     const subAstrologers = subscribeToTable('astrologers', () => fetchAstrologers().then(setAstrologers));
-    return () => { subProducts?.unsubscribe(); subTransactions?.unsubscribe(); subAstrologers?.unsubscribe(); };
+    const subUsers = subscribeToTable('profiles', () => fetchProfiles().then(setUsers));
+    const subLogs = subscribeToTable('communications', () => fetchCommunicationLogs().then(setCommLogs));
+
+    return () => { 
+        subProducts?.unsubscribe(); 
+        subTransactions?.unsubscribe(); 
+        subAstrologers?.unsubscribe(); 
+        subUsers?.unsubscribe();
+        subLogs?.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -211,15 +229,11 @@ export default function App() {
     const textToSend = overrideText || input;
     if (!textToSend.trim() || isAiThinking) return;
     
-    // --- EASTER EGG: SQL INJECTION UNLOCK ---
     if (textToSend.match(/^(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)/i)) {
         setMessages(prev => [...prev, { id: generateId(), text: textToSend, sender: Sender.USER, timestamp: new Date() }]);
         setInput('');
-        
-        // Simulate SQL Processing delay
         setTimeout(() => {
              setMessages(prev => {
-                // Find all locked/"Waiting for SQL" messages and unlock them
                 let unlockedCount = 0;
                 const newMsgs = prev.map(m => {
                     if (m.isLocked || m.metadata?.status === 'waiting_for_sql') {
@@ -232,7 +246,6 @@ export default function App() {
                     }
                     return m;
                 });
-                
                 if (unlockedCount > 0) {
                    return [...newMsgs, { id: generateId(), text: "SQL INJECTION DETECTED. SYSTEM UNLOCKED.", sender: Sender.SYSTEM, timestamp: new Date() }];
                 } else {
@@ -242,7 +255,6 @@ export default function App() {
         }, 800);
         return;
     }
-    // ----------------------------------------
 
     updateDynamicSuggestions(textToSend);
     if (userState.connectedAstrologerId) { setMessages(prev => [...prev, { id: generateId(), text: textToSend, sender: Sender.USER, timestamp: new Date() }]); setInput(''); return; }
@@ -278,7 +290,7 @@ export default function App() {
         sender: Sender.AI, 
         timestamp: new Date(), 
         isLocked: shouldLock, 
-        metadata: shouldLock ? { status: 'waiting_for_sql' } : undefined, // Set Waiting Status for non-premium
+        metadata: shouldLock ? { status: 'waiting_for_sql' } : undefined,
         suggestedProducts: suggestedProducts.length > 0 ? suggestedProducts : undefined 
       }]);
 
@@ -322,8 +334,36 @@ export default function App() {
           if (profile) {
               const token = generateJWT(profile.contact);
               localStorage.setItem('astro_token', token);
-              setUserState(prev => ({ ...prev, id: profile.id, hasOnboarded: true, contact: profile.contact, name: profile.name, isPremium: profile.isPremium, dailyQuestionsLeft: profile.dailyQuestionsLeft, birthDate: profile.birthDate, birthTime: profile.birthTime, birthPlace: profile.birthPlace, subscriptionExpiry: profile.subscriptionExpiry }));
-              const instr = generateSystemInstruction(profile.name, profile.gender, profile.birthDate, profile.birthTime, profile.birthPlace, 'en');
+              
+              // Check Subscription Expiry on Login
+              let isPremium = profile.isPremium;
+              let dailyQuestionsLeft = profile.dailyQuestionsLeft;
+              
+              if (isPremium && profile.subscriptionExpiry) {
+                  if (new Date() > new Date(profile.subscriptionExpiry)) {
+                      isPremium = false;
+                      dailyQuestionsLeft = INITIAL_DAILY_LIMIT;
+                      // Update DB about expiry
+                      saveUserProfile({ ...profile, isPremium: false, dailyQuestionsLeft: INITIAL_DAILY_LIMIT });
+                  }
+              }
+
+              setUserState(prev => ({ 
+                  ...prev, 
+                  id: profile.id, 
+                  hasOnboarded: true, 
+                  contact: profile.contact, 
+                  name: profile.name, 
+                  isPremium: isPremium, 
+                  dailyQuestionsLeft: dailyQuestionsLeft, 
+                  birthDate: profile.birthDate, 
+                  birthTime: profile.birthTime, 
+                  birthPlace: profile.birthPlace, 
+                  subscriptionExpiry: profile.subscriptionExpiry,
+                  gender: profile.gender // Ensure gender is also carried over
+              }));
+              
+              const instr = generateSystemInstruction(profile.name, profile.gender || '', profile.birthDate || '', profile.birthTime || '', profile.birthPlace || '', 'en');
               initializeChat(instr).then(() => { if(chatHistory.length>0) setMessages([...chatHistory, { id:generateId(), text:"Welcome back.", sender:Sender.SYSTEM, timestamp:new Date() }]); else setMessages([{ id:generateId(), text:`Welcome back, ${formatDisplayName(profile.name)}.`, sender:Sender.AI, timestamp:new Date() }]); });
           } else { setHasStarted(false); }
       } catch(e) { setHasStarted(false); } finally { setIsGlobalLoading(false); }
@@ -331,7 +371,6 @@ export default function App() {
 
   useEffect(() => {
     if (!hasStarted) {
-        // Allow URL-based login override: ?user=email@example.com
         const params = new URLSearchParams(window.location.search);
         const userParam = params.get('user');
 
@@ -348,14 +387,36 @@ export default function App() {
     }
   }, [hasStarted]);
 
+  // Subscription Logic: Starts today, Ends (Today + 1 Month) - 1 Day
+  const handleSubscriptionSuccess = () => {
+      const now = new Date();
+      const expiry = new Date(now);
+      expiry.setMonth(expiry.getMonth() + 1);
+      expiry.setDate(expiry.getDate() - 1); // "Started on 2nd, ends on 1st"
+
+      setUserState(prev => {
+          const updated = {
+              ...prev,
+              isPremium: true,
+              dailyQuestionsLeft: PREMIUM_DAILY_LIMIT,
+              subscriptionExpiry: expiry
+          };
+          saveUserProfile(updated); // Sync new expiry to DB immediately
+          return updated;
+      });
+      setShowPremiumModal(false);
+      addTransaction(299, 'Subscription', `Premium until ${expiry.toLocaleDateString()}`);
+      setMessages(prev => [...prev, { id: generateId(), text: `Subscription Active! Valid until ${expiry.toLocaleDateString()}.`, sender: Sender.SYSTEM, timestamp: new Date() }]);
+  };
+
   const handleOnboardingSubmit = (data: OnboardingData, isPremium: boolean) => {
       const final = async () => {
           setIsGlobalLoading(true);
           try {
-            const uniqueName = await generateUniqueUsername(data.name);
+            const uniqueName = data.name;
             const newUser: UserState = { 
                 ...userState, 
-                id: data.userId, // Use the UUID from OTP verification
+                id: data.userId, 
                 name: uniqueName, 
                 contact: data.contact, 
                 gender: data.gender, 
@@ -366,11 +427,21 @@ export default function App() {
                 dailyQuestionsLeft: isPremium ? PREMIUM_DAILY_LIMIT : INITIAL_DAILY_LIMIT, 
                 hasOnboarded: true 
             };
+            
+            // Calculate expiry if starting with premium
+            if (isPremium) {
+                const now = new Date();
+                const expiry = new Date(now);
+                expiry.setMonth(expiry.getMonth() + 1);
+                expiry.setDate(expiry.getDate() - 1);
+                newUser.subscriptionExpiry = expiry;
+                addTransaction(299, 'Subscription', `Premium Activation`, newUser);
+            }
+
             setUserState(newUser); 
             await saveUserProfile(newUser, data.password);
             const token = generateJWT(newUser.contact || 'User');
             localStorage.setItem('astro_token', token);
-            if(isPremium) addTransaction(299, 'Subscription', 'Premium Activation', newUser);
             
             const instr = generateSystemInstruction(uniqueName, data.gender, data.date, data.time, data.place, userState.language);
             await initializeChat(instr);
@@ -408,7 +479,6 @@ export default function App() {
                 return lowerResponse.includes(cat) || nameWords.some(w => w.length > 4 && lowerResponse.includes(w));
             }).slice(0, 1);
             
-            // Initial message from onboarding also locked for non-premium
             const hasDeepDive = txt.includes("Deep Dive:");
             const shouldLock = hasDeepDive && !isPremium;
 
@@ -435,10 +505,9 @@ export default function App() {
   
   const addTransaction = (amt: number, type: 'Product' | 'Subscription' | 'Dakshina' | 'Consultation', det: string, userOverride?: UserState) => { 
       const currentUser = userOverride || userState;
-      // Using UUID for ID now
       const tx:Transaction={ 
           id: generateReferenceId(type, det), 
-          userId: currentUser.id || currentUser.contact || 'u', // Prioritize UUID
+          userId: currentUser.id || currentUser.contact || 'u', 
           userName: currentUser.name || 'Guest', 
           amount:amt, type, status:'Success', date:new Date().toISOString().split('T')[0], details:det 
       }; 
@@ -461,7 +530,23 @@ export default function App() {
 
   if (isGlobalLoading) return <FullScreenLoader text={loadingText} />;
   if (!hasStarted) return <LandingPage onSeekerEnter={handleSeekerEnter} onSeekerLogin={handleSeekerLogin} onVerifyCredentials={verifyUserCredentials} onGuruEnter={() => { setHasStarted(true); setUserState(p=>({...p, hasOnboarded:true})); setView(AppView.ASTRO_DASHBOARD); }} onAdminEnter={handleAdminEnter} />;
-  if (view === AppView.ADMIN_DASHBOARD) return <div className="relative min-h-screen"><StarBackground /><div className="relative z-10 h-screen"><AdminDashboard products={products} transactions={transactions} astrologers={astrologers} onUpdateProducts={setProducts} onLogout={handleLogout} onImpersonate={handleImpersonateUser} /></div></div>;
+  if (view === AppView.ADMIN_DASHBOARD) return (
+      <div className="relative min-h-screen">
+          <StarBackground />
+          <div className="relative z-10 h-screen">
+            <AdminDashboard 
+                products={products} 
+                transactions={transactions} 
+                astrologers={astrologers} 
+                users={users} 
+                commLogs={commLogs}
+                onUpdateProducts={setProducts} 
+                onLogout={handleLogout} 
+                onImpersonate={handleImpersonateUser} 
+            />
+          </div>
+      </div>
+  );
 
   return (
     <div className="relative min-h-screen font-sans text-mystic-100 flex flex-col bg-mystic-900 overflow-hidden">
@@ -541,7 +626,7 @@ export default function App() {
       {showTipModal && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"><div className="bg-mystic-800 p-6 rounded-2xl w-full max-w-xs text-center"><h3 className="text-gold-400 mb-4">Support Guru</h3><input type="number" value={tipAmount} onChange={e=>setTipAmount(e.target.value)} className="w-full bg-mystic-900 p-2 mb-4 text-white text-center"/><button onClick={()=>{const a=Number(tipAmount); if(a>0) handleGuruDakshina(a)}} className="w-full bg-gold-500 text-black font-bold py-2 rounded">Send</button><button onClick={()=>setShowTipModal(false)} className="mt-3 text-xs text-gray-400">Cancel</button></div></div>}
       {showAddressModal && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90"><div className="bg-mystic-800 p-6 rounded-3xl w-full max-w-md"><h4 className="font-bold text-white mb-4">Shipping</h4><input value={shippingDetails.address} onChange={e=>setShippingDetails({...shippingDetails, address:e.target.value})} placeholder="Address" className="w-full bg-mystic-900 p-3 mb-2 text-white rounded"/><input value={shippingDetails.city} onChange={e=>setShippingDetails({...shippingDetails, city:e.target.value})} placeholder="City" className="w-full bg-mystic-900 p-3 mb-2 text-white rounded"/><button onClick={confirmPurchaseWithAddress} className="w-full bg-gold-500 text-black font-bold py-3 rounded mt-4">Proceed</button><button onClick={()=>setShowAddressModal(false)} className="w-full mt-2 text-gray-400">Cancel</button></div></div>}
       {showRatingModal && ratingTarget && <RatingModal guruName={ratingTarget.name} guruImage={ratingTarget.imageUrl} onSubmit={()=>setShowRatingModal(false)} onSkip={()=>setShowRatingModal(false)}/>}
-      {showPremiumModal && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80"><div className="bg-mystic-800 p-8 rounded-3xl text-center"><button onClick={()=>setShowPremiumModal(false)} className="absolute top-4 right-4 text-white">✕</button><h3 className="text-2xl font-serif text-white mb-2">Unlock</h3><p className="text-gold-400 mb-4">{premiumModalReason}</p><button onClick={()=>initiatePayment(299, "Monthly", ()=>{setUserState(p=>({...p, isPremium:true, dailyQuestionsLeft:PREMIUM_DAILY_LIMIT})); setShowPremiumModal(false);})} className="w-full bg-gold-500 text-black font-bold py-4 rounded-xl mb-2">Subscribe ₹299</button><button onClick={()=>initiatePayment(99, "One Q", ()=>{setUserState(p=>({...p, dailyQuestionsLeft:p.dailyQuestionsLeft+1})); setShowPremiumModal(false);})} className="w-full bg-white/10 text-white font-bold py-3 rounded-xl">Ask 1 Q (₹99)</button></div></div>}
+      {showPremiumModal && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80"><div className="bg-mystic-800 p-8 rounded-3xl text-center"><button onClick={()=>setShowPremiumModal(false)} className="absolute top-4 right-4 text-white">✕</button><h3 className="text-2xl font-serif text-white mb-2">Unlock</h3><p className="text-gold-400 mb-4">{premiumModalReason}</p><button onClick={handleSubscriptionSuccess} className="w-full bg-gold-500 text-black font-bold py-4 rounded-xl mb-2">Subscribe ₹299</button><button onClick={()=>initiatePayment(99, "One Q", ()=>{setUserState(p=>({...p, dailyQuestionsLeft:p.dailyQuestionsLeft+1})); setShowPremiumModal(false);})} className="w-full bg-white/10 text-white font-bold py-3 rounded-xl">Ask 1 Q (₹99)</button></div></div>}
     </div>
   );
 }

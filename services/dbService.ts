@@ -262,23 +262,32 @@ export const fetchUserProfile = async (contact: string | string[]): Promise<{ pr
           const decrypted = decryptAndDecompress(data.chat_history);
           if (decrypted) messages = decrypted.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) }));
       }
+      
+      // Explicit Mapping from DB (snake_case) to App (CamelCase)
+      const mappedProfile = { 
+          id: data.id, 
+          contact: data.contact, 
+          name: data.name, 
+          gender: data.gender, 
+          birthDate: data.birth_date, // snake_case from DB
+          birthTime: data.birth_time, // snake_case from DB
+          birthPlace: data.birth_place, // snake_case from DB
+          isPremium: data.is_premium, // snake_case from DB
+          dailyQuestionsLeft: data.daily_questions_left, // snake_case from DB
+          subscriptionExpiry: data.subscription_expiry ? new Date(data.subscription_expiry) : undefined, // snake_case from DB
+          password: data.password 
+      };
+
       return {
-        profile: { id: data.id, contact: data.contact, name: data.name, gender: data.gender, birthDate: data.birth_date, birthTime: data.birth_time, birthPlace: data.birth_place, isPremium: data.is_premium, dailyQuestionsLeft: data.daily_questions_left, subscriptionExpiry: data.subscription_expiry ? new Date(data.subscription_expiry) : undefined, password: data.password },
+        profile: mappedProfile,
         chatHistory: messages
       };
   } catch (e) { return { profile: null, chatHistory: [] }; }
 };
 
 export const generateUniqueUsername = async (fullName: string): Promise<string> => {
-    if (!supabase) return fullName.split(' ')[0];
-    const firstName = fullName.trim().split(' ')[0];
-    try {
-        const { data } = await supabase.from('profiles').select('name').ilike('name', `%${firstName}`);
-        if (!data || data.length === 0) return firstName;
-        const matches = data.filter(p => p.name.toLowerCase() === firstName.toLowerCase() || p.name.toLowerCase().endsWith(` ${firstName.toLowerCase()}`));
-        if (matches.length === 0) return firstName;
-        return `+${matches.length.toString().padStart(2, '0')} ${firstName}`;
-    } catch (e) { return firstName; }
+    // Return full name to respect user input. Duplicates are allowed as unique ID is handled by UUID/Contact.
+    return fullName.trim();
 };
 
 export const saveUserProfile = async (user: UserState, password?: string, messages?: Message[]) => {
@@ -288,9 +297,9 @@ export const saveUserProfile = async (user: UserState, password?: string, messag
         contact: user.contact,
         name: user.name || '',
         gender: user.gender || '',
-        birth_date: user.birthDate || '',
-        birth_time: user.birthTime || '',
-        birth_place: user.birthPlace || '',
+        birth_date: user.birthDate || '', // Storing as snake_case
+        birth_time: user.birthTime || '', // Storing as snake_case
+        birth_place: user.birthPlace || '', // Storing as snake_case
         is_premium: !!user.isPremium,
         daily_questions_left: typeof user.dailyQuestionsLeft === 'number' ? user.dailyQuestionsLeft : 0,
         subscription_expiry: user.subscriptionExpiry ? user.subscriptionExpiry.toISOString() : null

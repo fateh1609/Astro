@@ -2,25 +2,34 @@
 import React, { useState, useEffect } from 'react';
 import { Product, Transaction, SubscriptionTier, Astrologer, CommunicationLog, Message, Sender } from '../../types';
 import { DEFAULT_SUBSCRIPTION_TIERS, AVAILABLE_FEATURES } from '../../constants';
-import { saveAstrologer, deleteAstrologer, fetchProfiles, updateProfile, fetchCommunicationLogs, createProduct, deleteProductFromDb, fetchUsageStats } from '../../services/dbService';
+import { saveAstrologer, deleteAstrologer, updateProfile, createProduct, deleteProductFromDb, fetchUsageStats } from '../../services/dbService';
 import { decryptAndDecompress } from '../../services/securityService';
 
 interface AdminDashboardProps {
   products: Product[];
   transactions: Transaction[];
   astrologers: Astrologer[];
+  users: any[];
+  commLogs: CommunicationLog[];
   onUpdateProducts: (products: Product[]) => void;
   onLogout: () => void;
   onImpersonate: (user: any) => void;
 }
 
-const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, transactions, astrologers, onUpdateProducts, onLogout, onImpersonate }) => {
+const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
+    products, 
+    transactions, 
+    astrologers, 
+    users, 
+    commLogs, 
+    onUpdateProducts, 
+    onLogout, 
+    onImpersonate 
+}) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'shop' | 'users' | 'gurus' | 'finance' | 'communications' | 'subscriptions'>('overview');
   const [searchTerm, setSearchTerm] = useState('');
   
   const [filterStatus, setFilterStatus] = useState('all');
-  const [users, setUsers] = useState<any[]>([]);
-  const [commLogs, setCommLogs] = useState<CommunicationLog[]>([]);
   const [tiers, setTiers] = useState<SubscriptionTier[]>(DEFAULT_SUBSCRIPTION_TIERS);
   
   // Real-time API Usage Stats from DB
@@ -45,13 +54,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, transactions,
   useEffect(() => {
       // Always fetch overview stats on load
       fetchUsageStats().then(setUsageStats);
-
-      if (activeTab === 'users') {
-          fetchProfiles().then(setUsers);
-      }
-      if (activeTab === 'communications') {
-          fetchCommunicationLogs().then(setCommLogs);
-      }
   }, [activeTab]);
 
   const handleEditProduct = (product: Product) => { setEditingProduct(product); setIsProductModalOpen(true); };
@@ -65,7 +67,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, transactions,
   const removeAstro = async (id: string) => { if(window.confirm("Delete?")) await deleteAstrologer(id); };
 
   const handleEditUser = (user: any) => { setEditingUser(user); setIsUserModalOpen(true); };
-  const saveUserUpdates = async () => { if (!editingUser) return; setUsers(users.map(u => u.id === editingUser.id ? editingUser : u)); await updateProfile(editingUser.id, { is_premium: editingUser.is_premium, daily_questions_left: editingUser.daily_questions_left, name: editingUser.name }); setIsUserModalOpen(false); };
+  const saveUserUpdates = async () => { if (!editingUser) return; await updateProfile(editingUser.id, { is_premium: editingUser.is_premium, daily_questions_left: editingUser.daily_questions_left, name: editingUser.name }); setIsUserModalOpen(false); };
   const handleViewUserChat = (user: any) => { setViewingChatUser(user); if (user.chat_history) { const decrypted = decryptAndDecompress(user.chat_history); setUserChatHistory(decrypted || []); } else { setUserChatHistory([]); } setIsChatReviewOpen(true); };
 
   const handleEditTier = (tier: SubscriptionTier) => { setEditingTier({ ...tier }); setIsTierModalOpen(true); };
