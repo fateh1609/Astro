@@ -138,8 +138,6 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onUnlock, onPay,
     }
   }
 
-  const isWaitingForSql = message.metadata?.status === 'waiting_for_sql' && !isRevealed && !userHasPremium;
-
   // --- TYPING EFFECT LOGIC ---
   useEffect(() => {
       // Check if message is "fresh" (within last 60 seconds) AND from AI/Astro
@@ -449,38 +447,13 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onUnlock, onPay,
                 {(deepDive && displayedGist === fullGist) && (
                     <div className={`relative transition-all duration-700 ${!isUnlocked ? 'mt-4 pt-4 border-t border-white/10' : 'mt-2'}`}>
                     
-                    {/* If waiting for SQL, we show a special Terminal Box INSTEAD of the blurred text */}
-                    {isWaitingForSql ? (
-                        <div className="mt-4 p-4 bg-black rounded-lg border border-green-500/50 font-mono text-xs text-green-500 shadow-[0_0_10px_rgba(34,197,94,0.2)] animate-in fade-in slide-in-from-bottom-2">
-                            <div className="flex gap-2 items-center mb-2 border-b border-green-900/50 pb-2">
-                                <span className="text-red-500">●</span>
-                                <span className="text-yellow-500">●</span>
-                                <span className="text-green-500">●</span>
-                                <span className="ml-auto text-[10px] text-green-800">bash</span>
-                            </div>
-                            <div className="flex gap-2">
-                                <span className="text-gray-500">$</span>
-                                <span className="animate-pulse">waiting_for_sql_connection...</span>
-                            </div>
-                            <div className="mt-2 text-gray-400">
-                                Database lock active. Awaiting SQL injection to retrieve deep dive data.
-                            </div>
-                            <div className="mt-3 h-1 w-24 bg-green-900/30 rounded overflow-hidden">
-                                 <div className="h-full bg-green-500 animate-[loading_2s_ease-in-out_infinite] w-1/2"></div>
-                            </div>
-                            <div className="mt-2 text-[10px] text-green-700">
-                                Hint: Try `SELECT * FROM deep_dive` or Upgrade.
-                            </div>
-                        </div>
-                    ) : (
-                        // STANDARD BLURRED / UNLOCKED VIEW
-                        <div className={`transition-all duration-1000 ${!isUnlocked ? 'filter blur-md select-none h-20 overflow-hidden opacity-50' : 'opacity-100'}`}>
-                            {isUnlocked && <div className="h-4 border-t border-white/5 w-10 mb-4 opacity-50"></div>}
-                            <FormattedText text={deepDive} />
-                        </div>
-                    )}
+                    {/* STANDARD BLURRED / UNLOCKED VIEW */}
+                    <div className={`transition-all duration-1000 ${!isUnlocked ? 'filter blur-md select-none h-20 overflow-hidden opacity-50' : 'opacity-100'}`}>
+                        {isUnlocked && <div className="h-4 border-t border-white/5 w-10 mb-4 opacity-50"></div>}
+                        <FormattedText text={deepDive} />
+                    </div>
 
-                    {!isUnlocked && !isWaitingForSql && (
+                    {!isUnlocked && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-transparent to-mystic-900/90 rounded-b-xl z-10">
                         <p className="text-gold-200 text-xs mb-3 font-medium animate-pulse text-center px-4">
                             {t.getVisualVastu}
@@ -520,8 +493,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onUnlock, onPay,
                 </div>
             </div>
 
-            {/* Standard Upsell (Hidden if waiting for SQL to reduce clutter) */}
-            {!userHasPremium && isAI && displayedGist === fullGist && !isWaitingForSql && (
+            {/* Standard Upsell (Hidden if user has premium) */}
+            {!userHasPremium && isAI && displayedGist === fullGist && (
                 <div 
                     onClick={onSubscribe}
                     className="mt-4 -mx-5 -mb-2 bg-gradient-to-r from-mystic-900 to-mystic-950 border-t border-gold-500/20 py-3 px-5 rounded-b-2xl flex items-center justify-between cursor-pointer hover:bg-mystic-900 transition-colors group border-b border-white/5 animate-in slide-in-from-top-2"

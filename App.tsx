@@ -231,33 +231,6 @@ export default function App() {
     const textToSend = overrideText || input;
     if (!textToSend.trim() || isAiThinking) return;
     
-    if (textToSend.match(/^(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)/i)) {
-        setMessages(prev => [...prev, { id: generateId(), text: textToSend, sender: Sender.USER, timestamp: new Date() }]);
-        setInput('');
-        setTimeout(() => {
-             setMessages(prev => {
-                let unlockedCount = 0;
-                const newMsgs = prev.map(m => {
-                    if (m.isLocked || m.metadata?.status === 'waiting_for_sql') {
-                        unlockedCount++;
-                        return { 
-                          ...m, 
-                          isLocked: false, 
-                          metadata: { ...m.metadata, status: 'complete' } 
-                        };
-                    }
-                    return m;
-                });
-                if (unlockedCount > 0) {
-                   return [...newMsgs, { id: generateId(), text: "SQL INJECTION DETECTED. SYSTEM UNLOCKED.", sender: Sender.SYSTEM, timestamp: new Date() }];
-                } else {
-                   return [...newMsgs, { id: generateId(), text: "Syntax Error: No active locks to bypass.", sender: Sender.SYSTEM, timestamp: new Date() }];
-                }
-             });
-        }, 800);
-        return;
-    }
-
     updateDynamicSuggestions(textToSend);
     if (userState.connectedAstrologerId) { setMessages(prev => [...prev, { id: generateId(), text: textToSend, sender: Sender.USER, timestamp: new Date() }]); setInput(''); return; }
     if (userState.dailyQuestionsLeft <= 0 && !userState.isAdminImpersonating) { setPremiumModalReason('Daily question limit reached.'); setShowPremiumModal(true); return; }
@@ -292,7 +265,7 @@ export default function App() {
         sender: Sender.AI, 
         timestamp: new Date(), 
         isLocked: shouldLock, 
-        metadata: shouldLock ? { status: 'waiting_for_sql' } : undefined,
+        metadata: shouldLock ? { status: 'locked' } : undefined,
         suggestedProducts: suggestedProducts.length > 0 ? suggestedProducts : undefined 
       }]);
 
@@ -563,7 +536,7 @@ export default function App() {
                 sender:Sender.AI, 
                 timestamp:new Date(), 
                 isLocked: shouldLock, 
-                metadata: shouldLock ? { status: 'waiting_for_sql' } : undefined,
+                metadata: shouldLock ? { status: 'locked' } : undefined,
                 suggestedProducts: suggestedProducts.length > 0 ? suggestedProducts : undefined
             }]);
           } catch(e) { console.error(e); } 
@@ -643,7 +616,7 @@ export default function App() {
   return (
     <div className="relative min-h-screen font-sans text-mystic-100 flex flex-col bg-mystic-900 overflow-hidden">
       <StarBackground />
-      {userState.hasOnboarded && <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} user={userState} onNavigate={(v) => { if(v==='chart') setShowChartModal(true); else handleViewChange(v as AppView); setIsSidebarOpen(false); }} onOpenProfile={() => { setShowProfileModal(true); setIsSidebarOpen(false); }} onOpenHistory={openHistory} onLogout={handleLogout} onLanguageChange={handleLanguageChange} />}
+      {userState.hasOnboarded && <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} user={userState} onNavigate={(v) => { if(v==='chart') setShowChartModal(true); else if (v === 'upgrade') { setPremiumModalReason('Upgrade Plan'); setShowPremiumModal(true); } else handleViewChange(v as AppView); setIsSidebarOpen(false); }} onOpenProfile={() => { setShowProfileModal(true); setIsSidebarOpen(false); }} onOpenHistory={openHistory} onLogout={handleLogout} onLanguageChange={handleLanguageChange} />}
       {showHistoryModal && <HistoryModal transactions={transactions.filter(t => t.userId === userState.contact || t.userId === userState.id)} onClose={() => setShowHistoryModal(false)} initialTab={historyTab} />}
       {callState.isActive && <CallInterface partnerName={callState.partnerName} partnerImage={callState.partnerImage} callType={callState.type} onEndCall={handleCallEnd} channelName={callState.channelName || 'default'} />}
       {userState.isAdminImpersonating && <button onClick={handleExitImpersonation} className="fixed bottom-24 right-4 z-[60] bg-orange-600 hover:bg-orange-500 text-white font-bold py-3 px-6 rounded-full shadow-2xl border-2 border-orange-400 animate-bounce">🚪 Exit Admin Mode</button>}
