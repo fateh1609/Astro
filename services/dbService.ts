@@ -58,7 +58,11 @@ export const logCommunication = async (type: CommunicationLog['type'], recipient
 export const fetchCommunicationLogs = async (): Promise<CommunicationLog[]> => {
     if (!supabase) return [];
     try {
-        const { data } = await supabase.from('communications').select('*').order('timestamp', { ascending: false });
+        const { data, error } = await supabase.from('communications').select('*').order('timestamp', { ascending: false });
+        if (error) {
+            console.error("Error fetching logs:", error);
+            return [];
+        }
         return data ? data.map((log: any) => ({ ...log })) : [];
     } catch (e) { return []; }
 };
@@ -230,21 +234,74 @@ export const deleteProductFromDb = async (id: string) => { if(supabase) { const 
 export const fetchTransactions = async (): Promise<Transaction[]> => {
   if (!supabase) return [];
   try {
-      const { data } = await supabase.from('transactions').select('*').order('created_at', { ascending: false });
+      // Removing server-side order to prevent errors if column missing. Sorting client-side.
+      const { data, error } = await supabase.from('transactions').select('*');
+      
+      if (error) {
+          console.error("DB: Error fetching transactions:", error);
+          return [];
+      }
       if (!data) return [];
-      return data.map((t: any) => ({ id: t.id, userId: t.user_id, userName: t.user_name, amount: t.amount, type: t.type, status: t.status, date: new Date(t.created_at).toISOString().split('T')[0], details: t.details }));
-  } catch (e) { return []; }
+
+      const mapped = data.map((t: any) => ({ 
+          id: t.id, 
+          userId: t.user_id, 
+          userName: t.user_name, 
+          amount: t.amount, 
+          type: t.type, 
+          status: t.status, 
+          date: t.created_at ? new Date(t.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0], 
+          details: t.details,
+          _created_at: t.created_at // Keep for sorting
+      }));
+
+      // Sort Descending
+      return mapped.sort((a: any, b: any) => {
+          return new Date(b._created_at || 0).getTime() - new Date(a._created_at || 0).getTime();
+      });
+
+  } catch (e) { 
+      console.error("DB: Exception fetching transactions:", e);
+      return []; 
+  }
 };
 
 export const saveTransaction = async (tx: Transaction) => {
   if (!supabase) return;
-  try { await supabase.from('transactions').insert([{ id: tx.id, user_id: tx.userId, user_name: tx.userName, amount: tx.amount, type: tx.type, details: tx.details, status: tx.status, created_at: new Date().toISOString() }]); } catch (e) {}
+  try { 
+      await supabase.from('transactions').insert([{ 
+          id: tx.id, 
+          user_id: tx.userId, 
+          user_name: tx.userName, 
+          amount: tx.amount, 
+          type: tx.type, 
+          details: tx.details, 
+          status: tx.status, 
+          created_at: new Date().toISOString() 
+      }]); 
+  } catch (e) { console.error("DB: Failed to save transaction", e); }
 };
 
 export const fetchProfiles = async () => {
     if (!supabase) return [];
-    const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
-    return data || [];
+    try {
+        // Removing server-side order. Sorting client-side.
+        const { data, error } = await supabase.from('profiles').select('*');
+        
+        if (error) {
+            console.error("DB: Error fetching profiles:", error);
+            return [];
+        }
+        
+        if (!data) return [];
+
+        return data.sort((a: any, b: any) => {
+            return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+        });
+    } catch (e) {
+        console.error("DB: Exception fetching profiles:", e);
+        return [];
+    }
 };
 
 export const updateProfile = async (id: string, updates: any) => { if(supabase) await supabase.from('profiles').update(updates).eq('id', id); };

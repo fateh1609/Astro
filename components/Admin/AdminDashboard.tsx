@@ -14,6 +14,7 @@ interface AdminDashboardProps {
   onUpdateProducts: (products: Product[]) => void;
   onLogout: () => void;
   onImpersonate: (user: any) => void;
+  onRefresh?: () => void;
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ 
@@ -24,7 +25,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     commLogs, 
     onUpdateProducts, 
     onLogout, 
-    onImpersonate 
+    onImpersonate,
+    onRefresh
 }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'shop' | 'users' | 'gurus' | 'finance' | 'communications' | 'subscriptions'>('overview');
   const [searchTerm, setSearchTerm] = useState('');
@@ -228,7 +230,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
     <div className="flex flex-col h-full bg-mystic-950 text-white overflow-hidden">
         <header className="bg-mystic-900/90 backdrop-blur-md border-b border-gold-500/20 p-4 flex justify-between items-center shrink-0 z-20">
             <h1 className="text-xl md:text-2xl font-serif text-gold-400 font-bold flex items-center gap-3"><span className="text-2xl">🛡️</span> Admin Panel</h1>
-            <button onClick={onLogout} className="bg-red-500/10 text-red-400 border border-red-500/30 px-4 py-2 rounded-lg text-xs font-bold hover:bg-red-500 hover:text-white transition-all">Logout</button>
+            <div className="flex items-center gap-3">
+                {onRefresh && (
+                    <button onClick={onRefresh} className="bg-white/5 hover:bg-white/10 text-mystic-300 border border-white/10 px-3 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2">
+                        <span>↻</span> Refresh
+                    </button>
+                )}
+                <button onClick={onLogout} className="bg-red-500/10 text-red-400 border border-red-500/30 px-4 py-2 rounded-lg text-xs font-bold hover:bg-red-500 hover:text-white transition-all">Logout</button>
+            </div>
         </header>
 
         <div className="flex flex-1 overflow-hidden">

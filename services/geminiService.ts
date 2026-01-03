@@ -51,7 +51,7 @@ export const initializeChat = async (customInstruction?: string): Promise<Chat> 
     config: {
       systemInstruction: currentInstruction,
       temperature: 0.7,
-      maxOutputTokens: 2000,
+      maxOutputTokens: 8192, // Increased to prevent truncation
     }
   });
   return chatSession;
@@ -107,7 +107,7 @@ export const sendMessageToGemini = async (message: string, isPremium: boolean = 
   return "Connection failed.";
 };
 
-export const generateJsonContent = async (prompt: string, maxTokens: number = 2000, schema?: Schema): Promise<any> => {
+export const generateJsonContent = async (prompt: string, maxTokens: number = 4000, schema?: Schema): Promise<any> => {
     const client = getAI();
     try {
         const response = await client.models.generateContent({

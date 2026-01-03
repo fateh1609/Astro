@@ -97,8 +97,7 @@ export default function App() {
   const currentLang = userState.language || 'en';
   const t = TRANSLATIONS[currentLang] || TRANSLATIONS.en; 
 
-  useEffect(() => {
-    const loadData = async () => {
+  const refreshData = async () => {
         setIsGlobalLoading(true);
         setLoadingText("Aligning Cosmic Energies...");
         try {
@@ -121,15 +120,18 @@ export default function App() {
                 fetchCommunicationLogs()
             ]);
             
-            if (dbProducts.length > 0) setProducts(dbProducts);
-            if (dbTransactions.length > 0) setTransactions(dbTransactions);
-            if (dbAstrologers.length > 0) setAstrologers(dbAstrologers);
-            if (dbUsers.length > 0) setUsers(dbUsers);
-            if (dbLogs.length > 0) setCommLogs(dbLogs);
+            // Set state regardless of empty or not to ensure UI is in sync with DB
+            if (dbProducts) setProducts(dbProducts);
+            if (dbTransactions) setTransactions(dbTransactions);
+            if (dbAstrologers) setAstrologers(dbAstrologers);
+            if (dbUsers) setUsers(dbUsers);
+            if (dbLogs) setCommLogs(dbLogs);
             
         } catch (e) { console.error(e); } finally { setTimeout(() => setIsGlobalLoading(false), 800); }
-    };
-    loadData();
+  };
+
+  useEffect(() => {
+    refreshData();
     const subProducts = subscribeToTable('products', () => fetchProducts().then(setProducts));
     const subTransactions = subscribeToTable('transactions', () => fetchTransactions().then(setTransactions));
     const subAstrologers = subscribeToTable('astrologers', () => fetchAstrologers().then(setAstrologers));
@@ -542,7 +544,8 @@ export default function App() {
                 commLogs={commLogs}
                 onUpdateProducts={setProducts} 
                 onLogout={handleLogout} 
-                onImpersonate={handleImpersonateUser} 
+                onImpersonate={handleImpersonateUser}
+                onRefresh={refreshData} 
             />
           </div>
       </div>
