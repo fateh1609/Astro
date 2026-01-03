@@ -2,22 +2,27 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 // Access environment variables directly.
-// These must be set in your .env file and exposed via vite.config.ts
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
 
-// Initialize Supabase client only if credentials are available
-// This prevents "supabaseUrl is required" errors during development or if env vars are missing
 let supabaseInstance: SupabaseClient | null = null;
 
-if (supabaseUrl && supabaseAnonKey) {
+// robust check: ensure they are strings, not empty, and URL looks valid
+if (
+  typeof supabaseUrl === 'string' && 
+  supabaseUrl.trim().length > 0 && 
+  supabaseUrl.startsWith('http') &&
+  typeof supabaseAnonKey === 'string' && 
+  supabaseAnonKey.trim().length > 0
+) {
   try {
     supabaseInstance = createClient(supabaseUrl, supabaseAnonKey);
   } catch (error) {
-    console.error("Failed to initialize Supabase client:", error);
+    console.warn("Supabase client failed to initialize despite having keys:", error);
   }
 } else {
-  console.warn("Supabase URL or Key is missing. The app will run in offline/mock mode.");
+  // Only warn if we are in a mode where we expect it, otherwise silent for offline demo
+  console.log("Running in offline mode (Supabase keys missing or invalid).");
 }
 
 export const supabase = supabaseInstance;

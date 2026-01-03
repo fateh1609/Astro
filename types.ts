@@ -46,6 +46,7 @@ export interface Message {
     duration?: number; 
     callStatus?: 'ended' | 'missed' | 'active'; 
     durationText?: string; 
+    status?: string;
   };
 }
 

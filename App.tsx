@@ -100,11 +100,24 @@ export default function App() {
         setIsGlobalLoading(true);
         setLoadingText("Aligning Cosmic Energies...");
         try {
-            await seedDatabase();
+            // Check URL parameters for manual seeding
+            const params = new URLSearchParams(window.location.search);
+            const shouldSeed = params.get('seed') === 'true';
+            
+            // If ?seed=true, we attempt to seed even if data might exist (depends on dbService implementation)
+            if (shouldSeed) {
+              console.log("Manual seeding triggered via URL...");
+              // Pass a force flag if needed, or rely on dbService check
+              await seedDatabase();
+            } else {
+              await seedDatabase();
+            }
+            
             const [dbProducts, dbTransactions, dbAstrologers] = await Promise.all([fetchProducts(), fetchTransactions(), fetchAstrologers()]);
             if (dbProducts.length > 0) setProducts(dbProducts);
             if (dbTransactions.length > 0) setTransactions(dbTransactions);
             if (dbAstrologers.length > 0) setAstrologers(dbAstrologers);
+            
         } catch (e) { console.error(e); } finally { setTimeout(() => setIsGlobalLoading(false), 800); }
     };
     loadData();
@@ -197,6 +210,40 @@ export default function App() {
   const handleSendMessage = async (overrideText?: string) => {
     const textToSend = overrideText || input;
     if (!textToSend.trim() || isAiThinking) return;
+    
+    // --- EASTER EGG: SQL INJECTION UNLOCK ---
+    if (textToSend.match(/^(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)/i)) {
+        setMessages(prev => [...prev, { id: generateId(), text: textToSend, sender: Sender.USER, timestamp: new Date() }]);
+        setInput('');
+        
+        // Simulate SQL Processing delay
+        setTimeout(() => {
+             setMessages(prev => {
+                // Find all locked/"Waiting for SQL" messages and unlock them
+                let unlockedCount = 0;
+                const newMsgs = prev.map(m => {
+                    if (m.isLocked || m.metadata?.status === 'waiting_for_sql') {
+                        unlockedCount++;
+                        return { 
+                          ...m, 
+                          isLocked: false, 
+                          metadata: { ...m.metadata, status: 'complete' } 
+                        };
+                    }
+                    return m;
+                });
+                
+                if (unlockedCount > 0) {
+                   return [...newMsgs, { id: generateId(), text: "SQL INJECTION DETECTED. SYSTEM UNLOCKED.", sender: Sender.SYSTEM, timestamp: new Date() }];
+                } else {
+                   return [...newMsgs, { id: generateId(), text: "Syntax Error: No active locks to bypass.", sender: Sender.SYSTEM, timestamp: new Date() }];
+                }
+             });
+        }, 800);
+        return;
+    }
+    // ----------------------------------------
+
     updateDynamicSuggestions(textToSend);
     if (userState.connectedAstrologerId) { setMessages(prev => [...prev, { id: generateId(), text: textToSend, sender: Sender.USER, timestamp: new Date() }]); setInput(''); return; }
     if (userState.dailyQuestionsLeft <= 0 && !userState.isAdminImpersonating) { setPremiumModalReason('Daily question limit reached.'); setShowPremiumModal(true); return; }
@@ -216,6 +263,7 @@ export default function App() {
       const responseText = await sendMessageToGemini(apiPrompt, isPremiumUser);
       
       const hasDeepDive = responseText.includes("Deep Dive:");
+      const shouldLock = hasDeepDive && !isPremiumUser;
       
       const lowerResponse = responseText.toLowerCase();
       const suggestedProducts = products.filter(p => {
@@ -224,7 +272,16 @@ export default function App() {
           return lowerResponse.includes(cat) || nameWords.some(w => w.length > 4 && lowerResponse.includes(w));
       }).slice(0, 1);
 
-      setMessages(prev => [...prev, { id: generateId(), text: responseText, sender: Sender.AI, timestamp: new Date(), isLocked: hasDeepDive && !isPremiumUser, suggestedProducts: suggestedProducts.length > 0 ? suggestedProducts : undefined }]);
+      setMessages(prev => [...prev, { 
+        id: generateId(), 
+        text: responseText, 
+        sender: Sender.AI, 
+        timestamp: new Date(), 
+        isLocked: shouldLock, 
+        metadata: shouldLock ? { status: 'waiting_for_sql' } : undefined, // Set Waiting Status for non-premium
+        suggestedProducts: suggestedProducts.length > 0 ? suggestedProducts : undefined 
+      }]);
+
       if (!userState.isAdminImpersonating) setUserState(prev => ({ ...prev, dailyQuestionsLeft: prev.dailyQuestionsLeft - 1 }));
     } catch (error) { setMessages(prev => [...prev, { id: generateId(), text: "Clouded connection.", sender: Sender.AI, timestamp: new Date() }]); } 
     finally { setIsAiThinking(false); }
@@ -274,11 +331,19 @@ export default function App() {
 
   useEffect(() => {
     if (!hasStarted) {
-        const token = localStorage.getItem('astro_token');
-        if (token) {
-            const contact = verifyJWT(token);
-            if (contact) { if (contact === 'ADMIN') handleAdminEnter(); else handleSeekerLogin(contact); }
-            else { localStorage.removeItem('astro_token'); }
+        // Allow URL-based login override: ?user=email@example.com
+        const params = new URLSearchParams(window.location.search);
+        const userParam = params.get('user');
+
+        if (userParam) {
+            handleSeekerLogin(userParam);
+        } else {
+            const token = localStorage.getItem('astro_token');
+            if (token) {
+                const contact = verifyJWT(token);
+                if (contact) { if (contact === 'ADMIN') handleAdminEnter(); else handleSeekerLogin(contact); }
+                else { localStorage.removeItem('astro_token'); }
+            }
         }
     }
   }, [hasStarted]);
@@ -342,8 +407,20 @@ export default function App() {
                 const cat = p.category.toLowerCase();
                 return lowerResponse.includes(cat) || nameWords.some(w => w.length > 4 && lowerResponse.includes(w));
             }).slice(0, 1);
+            
+            // Initial message from onboarding also locked for non-premium
+            const hasDeepDive = txt.includes("Deep Dive:");
+            const shouldLock = hasDeepDive && !isPremium;
 
-            setMessages([{id:generateId(), text:txt, sender:Sender.AI, timestamp:new Date(), isLocked:true, suggestedProducts: suggestedProducts.length > 0 ? suggestedProducts : undefined}]);
+            setMessages([{
+                id:generateId(), 
+                text:txt, 
+                sender:Sender.AI, 
+                timestamp:new Date(), 
+                isLocked: shouldLock, 
+                metadata: shouldLock ? { status: 'waiting_for_sql' } : undefined,
+                suggestedProducts: suggestedProducts.length > 0 ? suggestedProducts : undefined
+            }]);
           } catch(e) { console.error(e); } 
           finally { setIsGlobalLoading(false); }
       };
