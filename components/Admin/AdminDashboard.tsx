@@ -1,9 +1,9 @@
+
 import React, { useState, useEffect } from 'react';
 import { Product, Transaction, SubscriptionTier, Astrologer, CommunicationLog, Message, Sender } from '../../types';
 import { DEFAULT_SUBSCRIPTION_TIERS, AVAILABLE_FEATURES } from '../../constants';
-import { saveAstrologer, deleteAstrologer, fetchProfiles, updateProfile, fetchCommunicationLogs, createProduct, deleteProductFromDb } from '../../services/dbService';
+import { saveAstrologer, deleteAstrologer, fetchProfiles, updateProfile, fetchCommunicationLogs, createProduct, deleteProductFromDb, fetchUsageStats } from '../../services/dbService';
 import { decryptAndDecompress } from '../../services/securityService';
-import { apiUsage } from '../../services/geminiService';
 
 interface AdminDashboardProps {
   products: Product[];
@@ -23,6 +23,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, transactions,
   const [commLogs, setCommLogs] = useState<CommunicationLog[]>([]);
   const [tiers, setTiers] = useState<SubscriptionTier[]>(DEFAULT_SUBSCRIPTION_TIERS);
   
+  // Real-time API Usage Stats from DB
+  const [usageStats, setUsageStats] = useState({ totalRequests: 0, estimatedTokens: 0 });
+  
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
 
@@ -40,6 +43,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, transactions,
   const [isChatReviewOpen, setIsChatReviewOpen] = useState(false);
 
   useEffect(() => {
+      // Always fetch overview stats on load
+      fetchUsageStats().then(setUsageStats);
+
       if (activeTab === 'users') {
           fetchProfiles().then(setUsers);
       }
@@ -105,16 +111,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, transactions,
                           <h3 className="text-indigo-400 font-bold uppercase tracking-widest text-sm flex items-center gap-2">
                               <span>🔮</span> Cosmic Engine Monitor
                           </h3>
-                          <p className="text-xs text-mystic-400">Real-time usage tracking for current session</p>
+                          <p className="text-xs text-mystic-400">Real-time usage tracking from Supabase</p>
                       </div>
                       <div className="flex gap-4">
                          <div className="bg-white/5 p-4 rounded-xl border border-white/5 text-center min-w-[120px]">
-                            <p className="text-[10px] text-mystic-400 uppercase mb-1">Requests</p>
-                            <p className="text-2xl font-bold text-white font-mono">{apiUsage.totalRequests}</p>
+                            <p className="text-[10px] text-mystic-400 uppercase mb-1">Total Requests</p>
+                            <p className="text-2xl font-bold text-white font-mono">{usageStats.totalRequests}</p>
                          </div>
                          <div className="bg-white/5 p-4 rounded-xl border border-white/5 text-center min-w-[120px]">
                             <p className="text-[10px] text-mystic-400 uppercase mb-1">Est. Tokens</p>
-                            <p className="text-2xl font-bold text-indigo-400 font-mono">{apiUsage.estimatedTokens.toLocaleString()}</p>
+                            <p className="text-2xl font-bold text-indigo-400 font-mono">{usageStats.estimatedTokens.toLocaleString()}</p>
                          </div>
                          <div className="bg-white/5 p-4 rounded-xl border border-white/5 text-center min-w-[120px]">
                             <p className="text-[10px] text-mystic-400 uppercase mb-1">Est. Cost</p>
@@ -124,13 +130,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ products, transactions,
                   </div>
                   <div className="mt-8">
                       <div className="flex justify-between items-end mb-2">
-                          <span className="text-[10px] text-mystic-500 font-bold uppercase tracking-widest">Rate Limit Intensity</span>
-                          <span className="text-xs font-bold text-indigo-300">Safe Zone</span>
+                          <span className="text-[10px] text-mystic-500 font-bold uppercase tracking-widest">Global Traffic Intensity</span>
+                          <span className="text-xs font-bold text-indigo-300">Live</span>
                       </div>
                       <div className="w-full bg-mystic-800 h-2 rounded-full overflow-hidden border border-white/5">
                           <div 
                             className="bg-gradient-to-r from-green-500 via-indigo-500 to-red-500 h-full transition-all duration-1000" 
-                            style={{ width: `${Math.min((apiUsage.totalRequests / 15) * 100, 100)}%` }}
+                            style={{ width: `${Math.min((usageStats.totalRequests / 1000) * 100, 100)}%` }}
                           ></div>
                       </div>
                   </div>

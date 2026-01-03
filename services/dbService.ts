@@ -1,6 +1,6 @@
 
 import { supabase } from './supabaseClient';
-import { Product, Transaction, UserState, Message, Astrologer, CommunicationLog } from '../types';
+import { Product, Transaction, UserState, Message, Astrologer, CommunicationLog, UsageLog } from '../types';
 import { MOCK_PRODUCTS, MOCK_ASTROLOGERS } from '../constants';
 import { hashPassword, compressAndEncrypt, decryptAndDecompress } from './securityService';
 
@@ -45,7 +45,6 @@ export const fetchCachedReading = async (key: string): Promise<string | null> =>
         if (error || !data) return null;
         return data.response;
     } catch (e) {
-        // Table might not exist or connection error, default to null (regenerate)
         return null;
     }
 };
@@ -109,6 +108,38 @@ export const fetchCommunicationLogs = async (): Promise<CommunicationLog[]> => {
     }
 };
 
+// --- TOKEN USAGE TRACKING (Backend) ---
+export const logTokenUsage = async (userId: string, feature: string, inputTokens: number, outputTokens: number) => {
+    if (!supabase) return;
+    try {
+        await supabase.from('usage_logs').insert([{
+            user_id: userId,
+            feature: feature,
+            input_tokens: inputTokens,
+            output_tokens: outputTokens,
+            total_tokens: inputTokens + outputTokens,
+            timestamp: new Date().toISOString()
+        }]);
+    } catch (e) {
+        console.error("Failed to log usage", e);
+    }
+};
+
+export const fetchUsageStats = async () => {
+    if (!supabase) return { totalRequests: 0, estimatedTokens: 0 };
+    try {
+        const { data, error } = await supabase.from('usage_logs').select('total_tokens');
+        if (error || !data) return { totalRequests: 0, estimatedTokens: 0 };
+        
+        const totalTokens = data.reduce((acc, curr) => acc + (curr.total_tokens || 0), 0);
+        return {
+            totalRequests: data.length,
+            estimatedTokens: totalTokens
+        };
+    } catch (e) {
+        return { totalRequests: 0, estimatedTokens: 0 };
+    }
+};
 
 // --- AUTHENTICATION (OTP) ---
 export const sendAuthOtp = async (contact: string): Promise<{ success: boolean; message?: string; isRateLimit?: boolean }> => {
@@ -116,20 +147,17 @@ export const sendAuthOtp = async (contact: string): Promise<{ success: boolean; 
 
     const isEmail = /[a-zA-Z@]/.test(contact);
 
-    // LOG ATTEMPT
     await logCommunication(isEmail ? 'email' : 'sms', contact, 'outbound', 'sent', 'OTP Requested');
 
     try {
         let error;
         if (isEmail) {
-            // Email OTP
             const res = await supabase.auth.signInWithOtp({
                 email: contact,
                 options: { shouldCreateUser: true }
             });
             error = res.error;
         } else {
-            // Phone OTP
             const phone = contact.replace(/[\s-]/g, '');
             const res = await supabase.auth.signInWithOtp({
                 phone: phone,
@@ -188,6 +216,27 @@ export const verifyAuthOtp = async (contact: string, token: string): Promise<{ s
         
         if (data.session) {
             await logCommunication(isEmail ? 'email' : 'sms', contact, 'inbound', 'completed', 'OTP Verified');
+            
+            // --- PROFILE SYNC FIX ---
+            // Ensure the profile exists in public.profiles. If not, create a skeleton.
+            const user = data.session.user;
+            if (user) {
+                const { data: profile } = await supabase.from('profiles').select('id').eq('contact', contact).single();
+                
+                if (!profile) {
+                    console.log("Creating new skeleton profile for", contact);
+                    // New user via OTP, create entry in profiles
+                    await supabase.from('profiles').insert([{
+                        id: user.id, // Sync Auth ID with Profile ID if possible, or let DB gen UUID
+                        contact: contact,
+                        name: contact.split('@')[0], // Default name
+                        daily_questions_left: 1, // Default limit
+                        is_premium: false
+                    }]);
+                }
+            }
+            // ------------------------
+
             return { success: true };
         } else {
             return { success: false, message: "Invalid code. Please try again." };
@@ -221,7 +270,6 @@ export const seedDatabase = async () => {
     try {
         const { count: prodCount } = await supabase.from('products').select('*', { count: 'exact', head: true });
         if (prodCount === 0) {
-            console.log("DB: Seeding initial products...");
             const productsPayload = MOCK_PRODUCTS.map(p => ({
                 name: p.name,
                 category: p.category,
@@ -235,7 +283,6 @@ export const seedDatabase = async () => {
 
         const { count: astroCount } = await supabase.from('astrologers').select('*', { count: 'exact', head: true });
         if (astroCount === 0) {
-            console.log("DB: Seeding initial astrologers...");
             const astroPayload = MOCK_ASTROLOGERS.map(a => ({
                 name: a.name,
                 specialty: a.specialty,
@@ -405,7 +452,6 @@ export const fetchTransactions = async (): Promise<Transaction[]> => {
 export const saveTransaction = async (tx: Transaction) => {
   if (!supabase) return;
   try {
-      // NOTE: We pass tx.id explicitly now. Ensure DB 'id' column is text, not uuid-only.
       await supabase.from('transactions').insert([{
         id: tx.id, 
         user_id: tx.userId,
@@ -506,7 +552,6 @@ export const generateUniqueUsername = async (fullName: string): Promise<string> 
         return `+${prefix} ${firstName}`;
         
     } catch (e) {
-        console.error("Name Gen Error", e);
         return firstName;
     }
 };

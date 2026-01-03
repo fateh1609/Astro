@@ -103,6 +103,16 @@ export interface CommunicationLog {
   details?: string; // e.g. "OTP Sent", "Duration: 5m"
 }
 
+export interface UsageLog {
+  id?: string;
+  user_id: string;
+  feature: 'chat' | 'horoscope' | 'analysis';
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  timestamp?: string;
+}
+
 export interface SubscriptionTier {
   id: string;
   name: string;

@@ -1,23 +1,31 @@
 
 import { GoogleGenAI, Chat, Schema } from "@google/genai";
 import { BASE_SYSTEM_INSTRUCTION } from '../constants';
+import { logTokenUsage } from './dbService';
+import { verifyJWT } from './securityService';
 
 let ai: GoogleGenAI | null = null;
 let chatSession: Chat | null = null;
 let currentInstruction: string = BASE_SYSTEM_INSTRUCTION;
 
-// Usage Tracking
-export const apiUsage = {
-    totalRequests: 0,
-    estimatedTokens: 0,
-    lastReset: new Date().toISOString()
+// Helper to identify user from token or context
+const getCurrentUserId = (): string => {
+    const token = localStorage.getItem('astro_token');
+    if (token) {
+        return verifyJWT(token) || 'anonymous';
+    }
+    return 'anonymous';
 };
 
-const trackUsage = (prompt: string, response: string) => {
-    apiUsage.totalRequests += 1;
-    // Rough estimate: 4 chars = 1 token. Improved for Hindi which is more token-dense.
-    const tokenMultiplier = prompt.match(/[\u0900-\u097F]/) ? 2 : 1; 
-    apiUsage.estimatedTokens += Math.ceil(((prompt.length + response.length) / 4) * tokenMultiplier);
+const trackUsageToDb = (prompt: string, response: string, feature: 'chat' | 'horoscope' = 'chat') => {
+    // Estimate tokens: 1 token ~= 4 chars (Rough Estimate)
+    // Detailed analysis shows approx 0.25 tokens per char
+    const inputTokens = Math.ceil(prompt.length / 4);
+    const outputTokens = Math.ceil(response.length / 4);
+    
+    // Log directly to Supabase via dbService
+    const userId = getCurrentUserId();
+    logTokenUsage(userId, feature, inputTokens, outputTokens);
 };
 
 const getAI = () => {
@@ -43,7 +51,6 @@ export const initializeChat = async (customInstruction?: string): Promise<Chat> 
     config: {
       systemInstruction: currentInstruction,
       temperature: 0.7,
-      // Default safety to prevent massive run-on responses
       maxOutputTokens: 2000,
     }
   });
@@ -63,7 +70,6 @@ export const sendMessageToGemini = async (message: string, isPremium: boolean = 
   const maxRetries = 3;
   let attempt = 0;
 
-  // Append verbosity instruction to reduce output tokens for free users
   const enhancedMessage = isPremium ? message : `${message} (BE CONCISE & PROVIDE ONLY A GIST)`;
 
   while (attempt < maxRetries) {
@@ -72,7 +78,10 @@ export const sendMessageToGemini = async (message: string, isPremium: boolean = 
         message: enhancedMessage
       });
       const responseText = result.text || "The stars are clouded...";
-      trackUsage(enhancedMessage, responseText);
+      
+      // Log DB Usage
+      trackUsageToDb(enhancedMessage, responseText, 'chat');
+      
       return responseText;
     } catch (error: any) {
       const isQuotaError = error?.status === 429 || error?.code === 429 || error?.message?.includes('quota');
@@ -104,9 +113,10 @@ export const generateJsonContent = async (prompt: string, maxTokens: number = 20
         
         let text = response.text;
         if (!text) return null;
-        trackUsage(prompt, text);
         
-        // Robust cleanup: remove markdown blocks if model wraps JSON
+        // Log DB Usage
+        trackUsageToDb(prompt, text, 'horoscope');
+        
         if (text.trim().startsWith('```')) {
             text = text.replace(/^```json\s*/, '').replace(/^```\s*/, '').replace(/```$/, '').trim();
         }
@@ -115,7 +125,6 @@ export const generateJsonContent = async (prompt: string, maxTokens: number = 20
             return JSON.parse(text);
         } catch (parseError) {
             console.warn("JSON Parse failed, attempting standard cleanup", parseError);
-            // Fallback for tricky markdown
             const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
             try {
                  return JSON.parse(cleanText);
