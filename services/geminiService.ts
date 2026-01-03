@@ -70,7 +70,10 @@ export const sendMessageToGemini = async (message: string, isPremium: boolean = 
   const maxRetries = 3;
   let attempt = 0;
 
-  const enhancedMessage = isPremium ? message : `${message} (BE CONCISE & PROVIDE ONLY A GIST)`;
+  // We now require full Deep Dive content for all users (to support unlock feature),
+  // so we do not strip the request for free users.
+  // The system instruction enforces the structure "Gist ... Deep Dive: ..."
+  const enhancedMessage = message;
 
   while (attempt < maxRetries) {
     try {

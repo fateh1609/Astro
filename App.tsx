@@ -61,7 +61,7 @@ export default function App() {
   const [isAiThinking, setIsAiThinking] = useState(false); 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
-  const [userState, setUserState] = useState<UserState>({ dailyQuestionsLeft: INITIAL_DAILY_LIMIT, isPremium: false, name: '', gender: '', contact: '', hasOnboarded: false, birthDate: '', birthTime: '', birthPlace: '', language: 'en' });
+  const [userState, setUserState] = useState<UserState>({ id: undefined, dailyQuestionsLeft: INITIAL_DAILY_LIMIT, isPremium: false, name: '', gender: '', contact: '', hasOnboarded: false, birthDate: '', birthTime: '', birthPlace: '', language: 'en' });
   const [currentSuggestions, setCurrentSuggestions] = useState<string[]>(SUGGESTED_QUESTIONS);
   const [products, setProducts] = useState<Product[]>(MOCK_PRODUCTS); 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -152,7 +152,6 @@ export default function App() {
       };
 
       try {
-          // Increased maxTokens to preventing string truncation in JSON response
           const data = await generateJsonContent(prompt, userState.isPremium ? 4000 : 2000, schema);
           if (data && data.daily) { setHoroscopeData(data); } 
           else { setHoroscopeData({ starSign: sign, daily: { overview: "Stars are shifting.", dos: ["Meditate"], donts: ["Stress"], luckyColor: "White", luckyNumber: "7" }, weekly: "Good week ahead.", monthly: "Plan carefully." }); }
@@ -207,26 +206,21 @@ export default function App() {
     setIsAiThinking(true);
     
     try {
-      // Prompt Engineering for Premium vs Free
       let apiPrompt = textToSend;
       const isPremiumUser = userState.isPremium || !!userState.isAdminImpersonating;
       
       if (isPremiumUser) {
-         // Premium: Direct answers for subsequent questions
          apiPrompt = `${textToSend} (Be direct, precise, and to the point. Avoid generic fillers.)`;
       }
       
       const responseText = await sendMessageToGemini(apiPrompt, isPremiumUser);
       
-      // Basic check if response has "Deep Dive"
       const hasDeepDive = responseText.includes("Deep Dive:");
       
-      // Auto-suggest products based on keywords in response
       const lowerResponse = responseText.toLowerCase();
       const suggestedProducts = products.filter(p => {
           const nameWords = p.name.toLowerCase().split(' ');
           const cat = p.category.toLowerCase();
-          // Check if response mentions product name or category
           return lowerResponse.includes(cat) || nameWords.some(w => w.length > 4 && lowerResponse.includes(w));
       }).slice(0, 1);
 
@@ -239,7 +233,7 @@ export default function App() {
   const handleSeekerEnter = () => setHasStarted(true);
   const handleAdminEnter = async () => { 
       setHasStarted(true); 
-      setUserState(prev => ({ ...prev, hasOnboarded: true, name: 'Administrator', contact: 'ADMIN', isPremium: true }));
+      setUserState(prev => ({ ...prev, hasOnboarded: true, name: 'Administrator', contact: 'ADMIN', isPremium: true, id: 'admin-uuid' }));
       const token = generateJWT('ADMIN');
       localStorage.setItem('astro_token', token);
       await logCommunication('system', 'ADMIN', 'internal', 'completed', 'Admin Session Started');
@@ -252,7 +246,7 @@ export default function App() {
       try {
           const { profile, chatHistory } = await fetchUserProfile(targetUser.contact);
           if (profile) {
-              setUserState({ ...profile, hasOnboarded: true, contact: profile.contact, name: profile.name, isPremium: profile.isPremium, dailyQuestionsLeft: profile.dailyQuestionsLeft, birthDate: profile.birthDate, birthTime: profile.birthTime, birthPlace: profile.birthPlace, subscriptionExpiry: profile.subscriptionExpiry, language: 'en', isAdminImpersonating: true });
+              setUserState({ ...profile, id: profile.id, hasOnboarded: true, contact: profile.contact, name: profile.name, isPremium: profile.isPremium, dailyQuestionsLeft: profile.dailyQuestionsLeft, birthDate: profile.birthDate, birthTime: profile.birthTime, birthPlace: profile.birthPlace, subscriptionExpiry: profile.subscriptionExpiry, language: 'en', isAdminImpersonating: true });
               const instr = generateSystemInstruction(profile.name, profile.gender, profile.birthDate, profile.birthTime, profile.birthPlace, 'en');
               initializeChat(instr).then(() => { if(chatHistory.length > 0) setMessages(chatHistory); else setMessages([{ id:generateId(), text:`[ADMIN MODE] ${profile.name}`, sender:Sender.SYSTEM, timestamp:new Date() }]); });
               setView(AppView.CHAT);
@@ -260,7 +254,7 @@ export default function App() {
       } catch (e) { alert("Failed to impersonate."); } finally { setIsGlobalLoading(false); }
   };
 
-  const handleExitImpersonation = () => { setView(AppView.ADMIN_DASHBOARD); setUserState(prev => ({ ...prev, isAdminImpersonating: false, name: 'Administrator', contact: 'ADMIN' })); };
+  const handleExitImpersonation = () => { setView(AppView.ADMIN_DASHBOARD); setUserState(prev => ({ ...prev, isAdminImpersonating: false, name: 'Administrator', contact: 'ADMIN', id: 'admin-uuid' })); };
 
   const handleSeekerLogin = async (contact: string) => {
       setHasStarted(true); 
@@ -271,7 +265,7 @@ export default function App() {
           if (profile) {
               const token = generateJWT(profile.contact);
               localStorage.setItem('astro_token', token);
-              setUserState(prev => ({ ...prev, hasOnboarded: true, contact: profile.contact, name: profile.name, isPremium: profile.isPremium, dailyQuestionsLeft: profile.dailyQuestionsLeft, birthDate: profile.birthDate, birthTime: profile.birthTime, birthPlace: profile.birthPlace, subscriptionExpiry: profile.subscriptionExpiry }));
+              setUserState(prev => ({ ...prev, id: profile.id, hasOnboarded: true, contact: profile.contact, name: profile.name, isPremium: profile.isPremium, dailyQuestionsLeft: profile.dailyQuestionsLeft, birthDate: profile.birthDate, birthTime: profile.birthTime, birthPlace: profile.birthPlace, subscriptionExpiry: profile.subscriptionExpiry }));
               const instr = generateSystemInstruction(profile.name, profile.gender, profile.birthDate, profile.birthTime, profile.birthPlace, 'en');
               initializeChat(instr).then(() => { if(chatHistory.length>0) setMessages([...chatHistory, { id:generateId(), text:"Welcome back.", sender:Sender.SYSTEM, timestamp:new Date() }]); else setMessages([{ id:generateId(), text:`Welcome back, ${formatDisplayName(profile.name)}.`, sender:Sender.AI, timestamp:new Date() }]); });
           } else { setHasStarted(false); }
@@ -294,7 +288,19 @@ export default function App() {
           setIsGlobalLoading(true);
           try {
             const uniqueName = await generateUniqueUsername(data.name);
-            const newUser = { ...userState, name: uniqueName, contact: data.contact, gender: data.gender, birthDate: data.date, birthTime: data.time, birthPlace: data.place, isPremium, dailyQuestionsLeft: isPremium ? PREMIUM_DAILY_LIMIT : INITIAL_DAILY_LIMIT, hasOnboarded: true };
+            const newUser: UserState = { 
+                ...userState, 
+                id: data.userId, // Use the UUID from OTP verification
+                name: uniqueName, 
+                contact: data.contact, 
+                gender: data.gender, 
+                birthDate: data.date, 
+                birthTime: data.time, 
+                birthPlace: data.place, 
+                isPremium, 
+                dailyQuestionsLeft: isPremium ? PREMIUM_DAILY_LIMIT : INITIAL_DAILY_LIMIT, 
+                hasOnboarded: true 
+            };
             setUserState(newUser); 
             await saveUserProfile(newUser, data.password);
             const token = generateJWT(newUser.contact || 'User');
@@ -304,16 +310,11 @@ export default function App() {
             const instr = generateSystemInstruction(uniqueName, data.gender, data.date, data.time, data.place, userState.language);
             await initializeChat(instr);
             
-            // --- DETERMINISTIC INITIAL RESPONSE ---
-            // Construct a unique key based on natal details to ensure identical responses for identical profiles
             const cacheKey = `${data.name.trim().toLowerCase()}_${data.date}_${data.time}_${data.place.trim().toLowerCase()}`.replace(/\s+/g, '_');
             
             let txt = await fetchCachedReading(cacheKey);
-            let fromCache = true;
 
             if (!txt) {
-                fromCache = false;
-                // Customized First Output based on Premium Status
                 let prompt = "Initial Overview: Name, Challenges, Vastu Hint, Warning. Deep Dive: Full Vastu.";
                 
                 if (isPremium) {
@@ -331,16 +332,10 @@ export default function App() {
                     Deep Dive: Detailed planetary nuances.
                     `;
                 }
-                
                 txt = await sendMessageToGemini(prompt, isPremium);
-                
-                // Save to cache for future users with identical details
-                if (txt && txt.length > 50) {
-                    await saveCachedReading(cacheKey, txt);
-                }
+                if (txt && txt.length > 50) await saveCachedReading(cacheKey, txt);
             }
             
-            // Trigger shop suggestions on first message if keywords exist
             const lowerResponse = txt.toLowerCase();
             const suggestedProducts = products.filter(p => {
                 const nameWords = p.name.toLowerCase().split(' ');
@@ -363,7 +358,13 @@ export default function App() {
   
   const addTransaction = (amt: number, type: 'Product' | 'Subscription' | 'Dakshina' | 'Consultation', det: string, userOverride?: UserState) => { 
       const currentUser = userOverride || userState;
-      const tx:Transaction={ id: generateReferenceId(type, det), userId:currentUser.contact||'u', userName:currentUser.name||'Guest', amount:amt, type, status:'Success', date:new Date().toISOString().split('T')[0], details:det }; 
+      // Using UUID for ID now
+      const tx:Transaction={ 
+          id: generateReferenceId(type, det), 
+          userId: currentUser.id || currentUser.contact || 'u', // Prioritize UUID
+          userName: currentUser.name || 'Guest', 
+          amount:amt, type, status:'Success', date:new Date().toISOString().split('T')[0], details:det 
+      }; 
       setTransactions(p=>[tx,...p]); saveTransaction(tx); 
   };
   
@@ -389,7 +390,7 @@ export default function App() {
     <div className="relative min-h-screen font-sans text-mystic-100 flex flex-col bg-mystic-900 overflow-hidden">
       <StarBackground />
       {userState.hasOnboarded && <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} user={userState} onNavigate={(v) => { if(v==='chart') setShowChartModal(true); else setView(v as AppView); setIsSidebarOpen(false); }} onOpenProfile={() => { setShowProfileModal(true); setIsSidebarOpen(false); }} onOpenHistory={openHistory} onLogout={handleLogout} onLanguageChange={handleLanguageChange} />}
-      {showHistoryModal && <HistoryModal transactions={transactions.filter(t => t.userId === userState.contact)} onClose={() => setShowHistoryModal(false)} initialTab={historyTab} />}
+      {showHistoryModal && <HistoryModal transactions={transactions.filter(t => t.userId === userState.contact || t.userId === userState.id)} onClose={() => setShowHistoryModal(false)} initialTab={historyTab} />}
       {callState.isActive && <CallInterface partnerName={callState.partnerName} partnerImage={callState.partnerImage} callType={callState.type} onEndCall={handleCallEnd} channelName={callState.channelName || 'default'} />}
       {userState.isAdminImpersonating && <button onClick={handleExitImpersonation} className="fixed bottom-24 right-4 z-[60] bg-orange-600 hover:bg-orange-500 text-white font-bold py-3 px-6 rounded-full shadow-2xl border-2 border-orange-400 animate-bounce">🚪 Exit Admin Mode</button>}
 

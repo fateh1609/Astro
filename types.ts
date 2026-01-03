@@ -39,13 +39,13 @@ export interface Message {
   fullContent?: string;
   astrologerId?: string;
   suggestedProducts?: Product[];
-  attachmentUrl?: string; // For Media
+  attachmentUrl?: string; 
   metadata?: {
     amount?: number;
     callType?: 'voice' | 'video';
-    duration?: number; // For Audio
-    callStatus?: 'ended' | 'missed' | 'active'; // For Calls
-    durationText?: string; // Formatted duration for Calls
+    duration?: number; 
+    callStatus?: 'ended' | 'missed' | 'active'; 
+    durationText?: string; 
   };
 }
 
@@ -96,11 +96,11 @@ export interface Transaction {
 export interface CommunicationLog {
   id: string;
   type: 'email' | 'sms' | 'call_voice' | 'call_video' | 'system';
-  recipient: string; // Contact or User Name
+  recipient: string; 
   direction: 'outbound' | 'inbound' | 'internal';
   status: 'sent' | 'delivered' | 'failed' | 'completed' | 'missed' | 'logged';
   timestamp: string;
-  details?: string; // e.g. "OTP Sent", "Duration: 5m"
+  details?: string; 
 }
 
 export interface UsageLog {
@@ -117,12 +117,13 @@ export interface SubscriptionTier {
   id: string;
   name: string;
   price: number;
-  duration: string; // 'Monthly' | 'One-Time' | 'Yearly'
-  benefits: string[]; // Display text
-  featureFlags: string[]; // System keys: ['daily_insight', 'chat_unlimited', 'call_access']
+  duration: string; 
+  benefits: string[]; 
+  featureFlags: string[]; 
 }
 
 export interface UserState {
+  id?: string; // UUID from DB
   dailyQuestionsLeft: number;
   isPremium: boolean;
   name: string;
@@ -136,7 +137,7 @@ export interface UserState {
   subscriptionExpiry?: Date;
   language: Language; 
   subscriptionTierId?: string;
-  isAdminImpersonating?: boolean; // New Flag for Admin Mode
+  isAdminImpersonating?: boolean; 
 }
 
 export interface CallState {
@@ -145,7 +146,7 @@ export interface CallState {
   partnerName: string;
   partnerImage: string;
   channelName?: string;
-  messageId?: string; // ID of the chat message that started the call
+  messageId?: string; 
 }
 
 export enum AppView {

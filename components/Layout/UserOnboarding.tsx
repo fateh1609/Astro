@@ -1,6 +1,6 @@
+
 import React, { useState, useEffect } from 'react';
 import { sendAuthOtp, verifyAuthOtp, fetchUserProfile } from '../../services/dbService';
-import { supabase } from '../../services/supabaseClient';
 
 export interface OnboardingData {
   contact: string;
@@ -10,6 +10,7 @@ export interface OnboardingData {
   time: string;
   place: string;
   password?: string;
+  userId?: string; // Newly added
 }
 
 interface UserOnboardingProps {
@@ -31,8 +32,6 @@ const COUNTRY_CODES = [
 
 const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }) => {
   const [step, setStep] = useState(1);
-  
-  // Contact State
   const [contactInput, setContactInput] = useState('');
   const [countryCode, setCountryCode] = useState('+91');
   const [otpSent, setOtpSent] = useState(false);
@@ -41,12 +40,9 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  
-  // Timer State for Resend Cooldown
   const [timer, setTimer] = useState(0);
-
-  // Map State
   const [debouncedPlace, setDebouncedPlace] = useState('');
+  const [verifiedUserId, setVerifiedUserId] = useState<string | undefined>(undefined);
 
   const [formData, setFormData] = useState<OnboardingData>({
     contact: '',
@@ -58,56 +54,39 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
     password: ''
   });
 
-  // Detect if input is email (has letters or @)
   const isEmailDetected = /[a-zA-Z@]/.test(contactInput);
 
-  // Automatic Country Code Detection based on Timezone
   useEffect(() => {
     try {
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        let detected = '+91'; // Default
-        
+        let detected = '+91'; 
         if (tz.includes('America')) detected = '+1';
         else if (tz.includes('Europe/London')) detected = '+44';
-        else if (tz.includes('Europe')) detected = '+49'; // Fallback for Europe
+        else if (tz.includes('Europe')) detected = '+49'; 
         else if (tz.includes('Australia')) detected = '+61';
         else if (tz.includes('Dubai') || tz.includes('Asia/Muscat')) detected = '+971';
         else if (tz.includes('Asia/Singapore')) detected = '+65';
         else if (tz.includes('Asia/Tokyo')) detected = '+81';
-        
-        if (COUNTRY_CODES.some(c => c.code === detected)) {
-            setCountryCode(detected);
-        }
-    } catch (e) {
-        console.warn("Could not detect timezone for country code", e);
-    }
+        if (COUNTRY_CODES.some(c => c.code === detected)) setCountryCode(detected);
+    } catch (e) {}
   }, []);
 
-  // Timer Countdown
   useEffect(() => {
     let interval: any;
-    if (timer > 0) {
-      interval = setInterval(() => setTimer(prev => prev - 1), 1000);
-    }
+    if (timer > 0) interval = setInterval(() => setTimer(prev => prev - 1), 1000);
     return () => clearInterval(interval);
   }, [timer]);
 
-  // Debounce Place Input for Map
   useEffect(() => {
-    const handler = setTimeout(() => {
-        setDebouncedPlace(formData.place);
-    }, 1000);
+    const handler = setTimeout(() => setDebouncedPlace(formData.place), 1000);
     return () => clearTimeout(handler);
   }, [formData.place]);
 
-  // Construct contact for Form Data (Internal)
-  // NOTE: For phone numbers, we remove space to be cleaner, but dbService will sanitize again for Auth
   useEffect(() => {
-      setErrorMsg(''); // Clear error when input changes
+      setErrorMsg(''); 
       if (isEmailDetected) {
           setFormData(prev => ({ ...prev, contact: contactInput }));
       } else {
-          // E.164 format roughly (CountryCode + Number, no space)
           setFormData(prev => ({ ...prev, contact: `${countryCode}${contactInput.trim()}` }));
       }
   }, [contactInput, countryCode, isEmailDetected]);
@@ -122,10 +101,7 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
       setIsLoading(true);
       setErrorMsg('');
 
-      // Construct contact for Auth
       const contact = isEmailDetected ? contactInput : `${countryCode}${contactInput.trim()}`;
-
-      // --- DUPLICATE CHECK ---
       try {
         const { profile } = await fetchUserProfile(contact);
         if (profile) {
@@ -133,21 +109,15 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
             setErrorMsg("This mobile number or email is already registered. Please login instead.");
             return;
         }
-      } catch (err) {
-          console.error("Uniqueness check failed", err);
-      }
-      // -----------------------
+      } catch (err) {}
 
       const result = await sendAuthOtp(contact);
-
       setIsLoading(false);
 
       if (result.success) {
           setOtpSent(true);
           setTimer(60); 
       } else if (result.isRateLimit) {
-          // If Rate Limit, assume code was sent recently or user is retrying. 
-          // Warn them but allow entry.
           alert("Note: You are requesting codes too quickly. Please check your inbox for the previous code.");
           setOtpSent(true);
           setTimer(60);
@@ -168,6 +138,10 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
 
       if (result.success) {
           setIsOtpVerified(true);
+          if (result.userId) {
+              setVerifiedUserId(result.userId);
+              setFormData(prev => ({ ...prev, userId: result.userId }));
+          }
       } else {
           setErrorMsg(result.message || "Invalid Code.");
       }
@@ -190,15 +164,16 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
       setPassword('');
       setTimer(0);
       setErrorMsg('');
+      setVerifiedUserId(undefined);
   };
 
   const handleFinalSubmit = (wantsPremium: boolean) => {
     if (formData.name && formData.date) {
-      onSubmit(formData, wantsPremium);
+      // Pass the complete form data including userId
+      onSubmit({ ...formData, userId: verifiedUserId }, wantsPremium);
     }
   };
 
-  // --- STEP 1: CONTACT ---
   const renderStep1 = () => (
     <div className="space-y-6 animate-in fade-in slide-in-from-right-8 duration-500">
         <div className="text-center mb-6">
@@ -206,153 +181,53 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
              <h3 className="text-xl font-serif text-white">Let's stay connected</h3>
              <p className="text-mystic-400 text-sm">Verify your mobile or email to start.</p>
         </div>
-
         <form onSubmit={otpSent ? (isOtpVerified ? handleSetPasswordAndContinue : handleVerifyOtp) : handleSendOtp} className="space-y-4">
             <label className="text-xs uppercase tracking-widest text-mystic-400 font-bold ml-1">Email or Mobile Number</label>
-            
             <div className="flex gap-2 relative">
                 {!isEmailDetected && !otpSent && (
                     <div className="animate-in slide-in-from-left-4 fade-in duration-300 shrink-0">
-                        <select
-                            value={countryCode}
-                            onChange={(e) => setCountryCode(e.target.value)}
-                            className="h-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-2 text-white focus:outline-none focus:border-gold-500 transition-all text-sm appearance-none text-center cursor-pointer min-w-[70px]"
-                        >
-                            {COUNTRY_CODES.map(c => (
-                                <option key={c.code} value={c.code}>{c.code}</option>
-                            ))}
+                        <select value={countryCode} onChange={(e) => setCountryCode(e.target.value)} className="h-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-2 text-white focus:outline-none focus:border-gold-500 transition-all text-sm appearance-none text-center cursor-pointer min-w-[70px]">
+                            {COUNTRY_CODES.map(c => <option key={c.code} value={c.code}>{c.code}</option>)}
                         </select>
                     </div>
                 )}
-                
-                <input 
-                    type="text" 
-                    value={contactInput}
-                    onChange={e => setContactInput(e.target.value)}
-                    disabled={otpSent || isLoading}
-                    className={`flex-1 bg-mystic-900/50 border rounded-xl px-4 py-4 text-white focus:outline-none focus:border-gold-500 transition-all placeholder-mystic-600 ${otpSent ? 'border-gold-500/50 text-mystic-400 cursor-not-allowed' : 'border-mystic-700'}`}
-                    placeholder="Enter mobile number or email"
-                    autoFocus={!otpSent}
-                />
-                
-                {otpSent && !isOtpVerified && (
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 text-gold-500 text-sm animate-pulse">
-                        Verifying...
-                    </div>
-                )}
-                {isOtpVerified && (
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 text-green-500 text-xl">
-                        ✓
-                    </div>
-                )}
+                <input type="text" value={contactInput} onChange={e => setContactInput(e.target.value)} disabled={otpSent || isLoading} className={`flex-1 bg-mystic-900/50 border rounded-xl px-4 py-4 text-white focus:outline-none focus:border-gold-500 transition-all placeholder-mystic-600 ${otpSent ? 'border-gold-500/50 text-mystic-400 cursor-not-allowed' : 'border-mystic-700'}`} placeholder="Enter mobile number or email" autoFocus={!otpSent} />
+                {otpSent && !isOtpVerified && <div className="absolute right-3 top-1/2 -translate-y-1/2 text-gold-500 text-sm animate-pulse">Verifying...</div>}
+                {isOtpVerified && <div className="absolute right-3 top-1/2 -translate-y-1/2 text-green-500 text-xl">✓</div>}
             </div>
-            
-            {!isEmailDetected && !otpSent && (
-                 <p className="text-[10px] text-mystic-500 pl-1">Country code: {countryCode} (Auto-detected)</p>
-            )}
+            {!isEmailDetected && !otpSent && <p className="text-[10px] text-mystic-500 pl-1">Country code: {countryCode} (Auto-detected)</p>}
 
-            {/* OTP INPUT SECTION */}
             {otpSent && !isOtpVerified && (
                 <div className="animate-in slide-in-from-top-4 fade-in duration-500 mt-4 bg-mystic-800/50 p-4 rounded-xl border border-gold-500/30">
                     <label className="text-xs uppercase tracking-widest text-gold-400 font-bold block mb-2 text-center">Enter 6-Digit Code</label>
-                    <input 
-                        type="text"
-                        value={otp}
-                        onChange={(e) => {
-                            const val = e.target.value.trim();
-                            if (val.length <= 6) setOtp(val);
-                        }}
-                        placeholder="• • • • • •"
-                        maxLength={6}
-                        className="w-full bg-mystic-900 border-2 border-mystic-700 focus:border-gold-500 rounded-lg py-3 text-center text-2xl tracking-[0.5em] text-white outline-none font-mono transition-colors"
-                        autoFocus
-                    />
-                    <div className="flex flex-col items-center justify-center mt-3 text-center gap-1">
-                         <p className="text-[10px] text-white">
-                             {isEmailDetected ? 'Check your email inbox/spam.' : 'Check your SMS messages.'}
-                         </p>
-                    </div>
-                    
+                    <input type="text" value={otp} onChange={(e) => { const val = e.target.value.trim(); if (val.length <= 6) setOtp(val); }} placeholder="• • • • • •" maxLength={6} className="w-full bg-mystic-900 border-2 border-mystic-700 focus:border-gold-500 rounded-lg py-3 text-center text-2xl tracking-[0.5em] text-white outline-none font-mono transition-colors" autoFocus />
                     <div className="flex justify-between items-center mt-4 border-t border-white/5 pt-2">
-                        <button 
-                            type="button" 
-                            onClick={handleSendOtp} 
-                            disabled={isLoading || timer > 0} 
-                            className={`text-[10px] underline ${timer > 0 ? 'text-mystic-600 cursor-not-allowed' : 'text-mystic-400 hover:text-white'}`}
-                        >
-                            {timer > 0 ? `Resend available in ${timer}s` : 'Resend Code'}
-                        </button>
+                        <button type="button" onClick={handleSendOtp} disabled={isLoading || timer > 0} className={`text-[10px] underline ${timer > 0 ? 'text-mystic-600 cursor-not-allowed' : 'text-mystic-400 hover:text-white'}`}>{timer > 0 ? `Resend available in ${timer}s` : 'Resend Code'}</button>
                         <button type="button" onClick={resetContact} className="text-[10px] text-red-400 hover:text-red-300 underline">Change Number/Email</button>
                     </div>
-                    
                     {errorMsg && <p className="text-red-400 text-xs text-center mt-2 font-bold">{errorMsg}</p>}
-
-                    <button 
-                        type="submit"
-                        disabled={otp.length !== 6 || isLoading}
-                        className="w-full mt-4 bg-gold-500 hover:bg-gold-400 disabled:opacity-50 disabled:cursor-not-allowed text-mystic-900 font-bold py-3 rounded-lg shadow-lg transition-all"
-                    >
-                        {isLoading ? 'Checking...' : 'Verify Code'}
-                    </button>
+                    <button type="submit" disabled={otp.length !== 6 || isLoading} className="w-full mt-4 bg-gold-500 hover:bg-gold-400 disabled:opacity-50 disabled:cursor-not-allowed text-mystic-900 font-bold py-3 rounded-lg shadow-lg transition-all">{isLoading ? 'Checking...' : 'Verify Code'}</button>
                 </div>
             )}
 
-            {/* PASSWORD CREATION SECTION */}
             {isOtpVerified && (
                  <div className="animate-in slide-in-from-top-4 fade-in duration-500 mt-4 space-y-4">
                     <div className="bg-mystic-800/50 p-4 rounded-xl border border-green-500/30">
                         <label className="text-xs uppercase tracking-widest text-green-400 font-bold block mb-2">Create Password</label>
-                        <input 
-                            type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            placeholder="Set a secure password"
-                            className="w-full bg-mystic-900 border border-mystic-600 focus:border-green-500 rounded-lg py-3 px-4 text-white outline-none transition-colors"
-                            autoFocus
-                        />
-                         <p className="text-[10px] text-mystic-500 mt-2">Use this password to login next time.</p>
+                        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Set a secure password" className="w-full bg-mystic-900 border border-mystic-600 focus:border-green-500 rounded-lg py-3 px-4 text-white outline-none transition-colors" autoFocus />
                     </div>
-                    
                     {errorMsg && <p className="text-red-400 text-xs text-center font-bold">{errorMsg}</p>}
-
-                    <button 
-                        type="submit"
-                        disabled={password.length < 4}
-                        className="w-full bg-green-500 hover:bg-green-400 disabled:opacity-50 disabled:cursor-not-allowed text-mystic-900 font-bold py-4 rounded-xl shadow-lg transition-all"
-                    >
-                        Save & Continue →
-                    </button>
+                    <button type="submit" disabled={password.length < 4} className="w-full bg-green-500 hover:bg-green-400 disabled:opacity-50 disabled:cursor-not-allowed text-mystic-900 font-bold py-4 rounded-xl shadow-lg transition-all">Save & Continue →</button>
                  </div>
             )}
-
             {!otpSent && (
                 <>
                     {errorMsg && <p className="text-red-400 text-xs text-center font-bold">{errorMsg}</p>}
-                    <button 
-                        type="submit" 
-                        disabled={(!isEmailDetected && contactInput.length < 5) || (isEmailDetected && !contactInput.includes('@')) || isLoading}
-                        className="w-full bg-gold-500 hover:bg-gold-400 disabled:opacity-50 disabled:cursor-not-allowed text-mystic-900 font-bold py-4 rounded-xl shadow-lg transition-all flex justify-center"
-                    >
-                        {isLoading ? (
-                            <div className="w-5 h-5 border-2 border-mystic-900 border-t-transparent rounded-full animate-spin"></div>
-                        ) : (
-                            'Send Verification Code'
-                        )}
-                    </button>
+                    <button type="submit" disabled={(!isEmailDetected && contactInput.length < 5) || (isEmailDetected && !contactInput.includes('@')) || isLoading} className="w-full bg-gold-500 hover:bg-gold-400 disabled:opacity-50 disabled:cursor-not-allowed text-mystic-900 font-bold py-4 rounded-xl shadow-lg transition-all flex justify-center">{isLoading ? <div className="w-5 h-5 border-2 border-mystic-900 border-t-transparent rounded-full animate-spin"></div> : 'Send Verification Code'}</button>
                 </>
             )}
         </form>
-
-        {!otpSent && onGuruLogin && (
-            <div className="mt-4 text-center">
-                <button 
-                    onClick={onGuruLogin}
-                    className="text-xs text-violet-400 hover:text-white transition-colors underline"
-                >
-                    Guru Login Shortcut
-                </button>
-            </div>
-        )}
+        {!otpSent && onGuruLogin && <div className="mt-4 text-center"><button onClick={onGuruLogin} className="text-xs text-violet-400 hover:text-white transition-colors underline">Guru Login Shortcut</button></div>}
     </div>
   );
 
@@ -366,35 +241,18 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
         <div className="space-y-4">
             <div className="space-y-2">
                 <label className="text-xs uppercase tracking-widest text-mystic-400 font-bold ml-1">Your Name</label>
-                <input 
-                    type="text" 
-                    required
-                    value={formData.name}
-                    onChange={e => setFormData({...formData, name: e.target.value})}
-                    className="w-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-4 py-4 text-white focus:outline-none focus:border-gold-500 transition-all"
-                    placeholder="Enter your full name"
-                    autoFocus
-                />
+                <input type="text" required value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-4 py-4 text-white focus:outline-none focus:border-gold-500 transition-all" placeholder="Enter your full name" autoFocus />
             </div>
             <div className="space-y-2">
                 <label className="text-xs uppercase tracking-widest text-mystic-400 font-bold ml-1">Gender</label>
                 <div className="grid grid-cols-3 gap-3">
                     {['Male', 'Female', 'Other'].map(g => (
-                        <button
-                            type="button"
-                            key={g}
-                            onClick={() => setFormData({...formData, gender: g})}
-                            className={`py-3 rounded-xl border font-bold text-sm transition-all ${formData.gender === g ? 'bg-gold-500/20 border-gold-500 text-gold-400' : 'bg-mystic-900/30 border-mystic-700 text-mystic-400 hover:bg-mystic-800'}`}
-                        >
-                            {g}
-                        </button>
+                        <button type="button" key={g} onClick={() => setFormData({...formData, gender: g})} className={`py-3 rounded-xl border font-bold text-sm transition-all ${formData.gender === g ? 'bg-gold-500/20 border-gold-500 text-gold-400' : 'bg-mystic-900/30 border-mystic-700 text-mystic-400 hover:bg-mystic-800'}`}>{g}</button>
                     ))}
                 </div>
             </div>
         </div>
-        <button type="submit" disabled={!formData.name || !formData.gender} className="w-full bg-gold-500 hover:bg-gold-400 disabled:opacity-50 disabled:cursor-not-allowed text-mystic-900 font-bold py-4 rounded-xl shadow-lg transition-all">
-            Next Step →
-        </button>
+        <button type="submit" disabled={!formData.name || !formData.gender} className="w-full bg-gold-500 hover:bg-gold-400 disabled:opacity-50 disabled:cursor-not-allowed text-mystic-900 font-bold py-4 rounded-xl shadow-lg transition-all">Next Step →</button>
     </form>
   );
 
@@ -408,31 +266,14 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
         <div className="grid grid-cols-1 gap-5">
             <div className="space-y-2">
                 <label className="text-xs uppercase tracking-widest text-mystic-400 font-bold ml-1">Birth Date</label>
-                <input 
-                    type="date" 
-                    required
-                    value={formData.date}
-                    onChange={e => setFormData({...formData, date: e.target.value})}
-                    className="w-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-4 py-4 text-white focus:outline-none focus:border-gold-500 transition-all [color-scheme:dark]"
-                />
+                <input type="date" required value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-4 py-4 text-white focus:outline-none focus:border-gold-500 transition-all [color-scheme:dark]" />
             </div>
             <div className="space-y-2">
                 <label className="text-xs uppercase tracking-widest text-mystic-400 font-bold ml-1">Birth Time</label>
-                <input 
-                    type="time" 
-                    required
-                    value={formData.time}
-                    onChange={e => setFormData({...formData, time: e.target.value})}
-                    className="w-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-4 py-4 text-white focus:outline-none focus:border-gold-500 transition-all [color-scheme:dark]"
-                />
+                <input type="time" required value={formData.time} onChange={e => setFormData({...formData, time: e.target.value})} className="w-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-4 py-4 text-white focus:outline-none focus:border-gold-500 transition-all [color-scheme:dark]" />
             </div>
         </div>
-        <button 
-            type="submit" 
-            disabled={!formData.date || !formData.time}
-            className="w-full bg-gold-500 hover:bg-gold-400 disabled:opacity-50 disabled:cursor-not-allowed text-mystic-900 font-bold py-4 rounded-xl shadow-lg transition-all">
-            Next Step →
-        </button>
+        <button type="submit" disabled={!formData.date || !formData.time} className="w-full bg-gold-500 hover:bg-gold-400 disabled:opacity-50 disabled:cursor-not-allowed text-mystic-900 font-bold py-4 rounded-xl shadow-lg transition-all">Next Step →</button>
     </form>
   );
 
@@ -443,23 +284,10 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
              <h3 className="text-xl font-serif text-white">Place of Origin</h3>
              <p className="text-mystic-400 text-sm">Location corrects the planetary coordinates.</p>
         </div>
-        
-        {/* MAP VISUALIZATION */}
         <div className="relative w-full h-48 rounded-xl overflow-hidden border border-mystic-600/50 bg-black/40 shadow-inner group">
-            {/* Grid Overlay */}
             <div className="absolute inset-0 z-10 bg-[url('https://www.transparenttextures.com/patterns/graphy-dark.png')] opacity-30 pointer-events-none"></div>
-            
-            {/* Live Map or Placeholder */}
             {debouncedPlace.length > 3 ? (
-                 <iframe 
-                    width="100%" 
-                    height="100%" 
-                    frameBorder="0" 
-                    style={{ border: 0, opacity: 0.7, filter: 'contrast(1.2) saturate(0.8)' }}
-                    src={`https://maps.google.com/maps?q=${encodeURIComponent(debouncedPlace)}&t=m&z=10&output=embed&iwloc=near`}
-                    allowFullScreen
-                    className="transition-opacity duration-1000"
-                ></iframe>
+                 <iframe width="100%" height="100%" frameBorder="0" style={{ border: 0, opacity: 0.7, filter: 'contrast(1.2) saturate(0.8)' }} src={`https://maps.google.com/maps?q=${encodeURIComponent(debouncedPlace)}&t=m&z=10&output=embed&iwloc=near`} allowFullScreen className="transition-opacity duration-1000"></iframe>
             ) : (
                 <div className="absolute inset-0 flex items-center justify-center">
                     <div className="w-32 h-32 border border-gold-500/20 rounded-full animate-ping opacity-20 absolute"></div>
@@ -467,64 +295,28 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
                     <span className="text-xs text-mystic-500 font-mono tracking-widest z-10">AWAITING COORDINATES...</span>
                 </div>
             )}
-
-            {/* Aesthetic Overlays */}
             <div className="absolute inset-0 z-20 pointer-events-none border-2 border-mystic-800/50 rounded-xl"></div>
-            {/* Crosshair */}
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 z-20 pointer-events-none opacity-50">
-                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-0.5 h-2 bg-gold-400"></div>
-                <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-0.5 h-2 bg-gold-400"></div>
-                <div className="absolute left-0 top-1/2 -translate-y-1/2 h-0.5 w-2 bg-gold-400"></div>
-                <div className="absolute right-0 top-1/2 -translate-y-1/2 h-0.5 w-2 bg-gold-400"></div>
-                <div className="absolute inset-0 border border-gold-400/30 rounded-full"></div>
-            </div>
-            {/* Scanner Line */}
-            {debouncedPlace.length > 3 && (
-                <div className="absolute top-0 left-0 w-full h-1 bg-green-400/30 shadow-[0_0_15px_rgba(74,222,128,0.5)] z-20 animate-[scan_2s_ease-in-out_infinite]"></div>
-            )}
+            {debouncedPlace.length > 3 && <div className="absolute top-0 left-0 w-full h-1 bg-green-400/30 shadow-[0_0_15px_rgba(74,222,128,0.5)] z-20 animate-[scan_2s_ease-in-out_infinite]"></div>}
         </div>
-
         <div className="space-y-2">
             <label className="text-xs uppercase tracking-widest text-mystic-400 font-bold ml-1">City, State, Country</label>
-            <input 
-                type="text" 
-                required
-                value={formData.place}
-                onChange={e => setFormData({...formData, place: e.target.value})}
-                className="w-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-4 py-4 text-white focus:outline-none focus:border-gold-500 transition-all placeholder-mystic-600 font-bold tracking-wide"
-                placeholder="e.g. Mumbai, Maharashtra"
-                autoFocus
-            />
+            <input type="text" required value={formData.place} onChange={e => setFormData({...formData, place: e.target.value})} className="w-full bg-mystic-900/50 border border-mystic-700 rounded-xl px-4 py-4 text-white focus:outline-none focus:border-gold-500 transition-all placeholder-mystic-600 font-bold tracking-wide" placeholder="e.g. Mumbai, Maharashtra" autoFocus />
         </div>
-        <button 
-            type="submit" 
-            disabled={!formData.place}
-            className="w-full bg-gold-500 hover:bg-gold-400 disabled:opacity-50 disabled:cursor-not-allowed text-mystic-900 font-bold py-4 rounded-xl shadow-lg transition-all"
-        >
-             Unlock Your Destiny →
-        </button>
+        <button type="submit" disabled={!formData.place} className="w-full bg-gold-500 hover:bg-gold-400 disabled:opacity-50 disabled:cursor-not-allowed text-mystic-900 font-bold py-4 rounded-xl shadow-lg transition-all">Unlock Your Destiny →</button>
     </form>
   );
 
   const renderStep5 = () => (
     <div className="space-y-6 animate-in fade-in slide-in-from-right-8 duration-500">
         <div className="text-center mb-6">
-             <div className="w-16 h-16 bg-gradient-to-tr from-gold-400 to-yellow-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-[0_0_30px_rgba(234,179,8,0.4)] text-3xl">
-                🔓
-             </div>
+             <div className="w-16 h-16 bg-gradient-to-tr from-gold-400 to-yellow-600 rounded-full flex items-center justify-center mx-auto mb-4 shadow-[0_0_30px_rgba(234,179,8,0.4)] text-3xl">🔓</div>
              <h3 className="text-2xl font-serif text-white mb-2">Final Step</h3>
              <p className="text-mystic-300 text-sm">Choose how you want to reveal your astrological reading.</p>
         </div>
-
         <div className="bg-gradient-to-br from-mystic-800 to-mystic-900 border border-gold-500/30 rounded-2xl p-6 relative overflow-hidden group hover:border-gold-500/50 transition-all">
-            <div className="absolute top-0 right-0 bg-gold-500 text-mystic-900 text-[10px] font-bold px-3 py-1 rounded-bl-xl uppercase tracking-wider">
-                Recommended
-            </div>
+            <div className="absolute top-0 right-0 bg-gold-500 text-mystic-900 text-[10px] font-bold px-3 py-1 rounded-bl-xl uppercase tracking-wider">Recommended</div>
             <div className="flex justify-between items-start mb-4">
-                <div>
-                    <h4 className="text-lg font-bold text-white">Premium Access</h4>
-                    <p className="text-gold-400 font-bold text-xl">₹299 <span className="text-xs font-normal text-mystic-400">/ month</span></p>
-                </div>
+                <div><h4 className="text-lg font-bold text-white">Premium Access</h4><p className="text-gold-400 font-bold text-xl">₹299 <span className="text-xs font-normal text-mystic-400">/ month</span></p></div>
                 <div className="text-3xl">✨</div>
             </div>
             <ul className="space-y-2 mb-6 text-sm text-mystic-300">
@@ -533,21 +325,10 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
                 <li className="flex items-center gap-2"><span className="text-green-400">✓</span> Download Natal Chart</li>
                 <li className="flex items-center gap-2"><span className="text-green-400">✓</span> Priority Instant Response</li>
             </ul>
-            <button 
-                onClick={() => handleFinalSubmit(true)}
-                className="w-full bg-gradient-to-r from-gold-600 to-gold-400 hover:from-gold-500 hover:to-gold-300 text-mystic-900 font-bold py-3.5 rounded-xl shadow-lg transition-transform active:scale-[0.98]"
-            >
-                Unlock Premium Now
-            </button>
+            <button onClick={() => handleFinalSubmit(true)} className="w-full bg-gradient-to-r from-gold-600 to-gold-400 hover:from-gold-500 hover:to-gold-300 text-mystic-900 font-bold py-3.5 rounded-xl shadow-lg transition-transform active:scale-[0.98]">Unlock Premium Now</button>
         </div>
-
         <div className="text-center">
-            <button 
-                onClick={() => handleFinalSubmit(false)}
-                className="text-sm text-mystic-400 hover:text-white underline decoration-mystic-600 underline-offset-4 transition-colors"
-            >
-                Continue with Limited Free Access (1 Question)
-            </button>
+            <button onClick={() => handleFinalSubmit(false)} className="text-sm text-mystic-400 hover:text-white underline decoration-mystic-600 underline-offset-4 transition-colors">Continue with Limited Free Access (1 Question)</button>
         </div>
     </div>
   );
@@ -556,21 +337,9 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
     <div className="flex flex-col items-center justify-center flex-1 w-full p-4">
       <div className="bg-mystic-800/60 backdrop-blur-xl border border-white/10 p-8 rounded-3xl w-full max-w-md shadow-2xl relative my-auto">
         <div className="absolute top-0 left-0 right-0 h-1.5 bg-mystic-900 rounded-t-3xl overflow-hidden">
-            <div 
-                className="h-full bg-gold-500 transition-all duration-500 ease-out"
-                style={{ width: `${(step / 5) * 100}%` }}
-            ></div>
+            <div className="h-full bg-gold-500 transition-all duration-500 ease-out" style={{ width: `${(step / 5) * 100}%` }}></div>
         </div>
-
-        {step > 1 && (
-            <button 
-                onClick={() => setStep(prev => prev - 1)}
-                className="absolute top-6 left-6 text-mystic-500 hover:text-white transition-colors"
-            >
-                ← Back
-            </button>
-        )}
-        
+        {step > 1 && <button onClick={() => setStep(prev => prev - 1)} className="absolute top-6 left-6 text-mystic-500 hover:text-white transition-colors">← Back</button>}
         <div className="mt-4">
             {step === 1 && renderStep1()}
             {step === 2 && renderStep2()}
@@ -578,11 +347,8 @@ const UserOnboarding: React.FC<UserOnboardingProps> = ({ onSubmit, onGuruLogin }
             {step === 4 && renderStep4()}
             {step === 5 && renderStep5()}
         </div>
-        
         <div className="mt-6 text-center">
-            <p className="text-[10px] text-mystic-600 uppercase tracking-widest font-bold">
-                Step {step} of 5
-            </p>
+            <p className="text-[10px] text-mystic-600 uppercase tracking-widest font-bold">Step {step} of 5</p>
         </div>
       </div>
     </div>
