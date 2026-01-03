@@ -554,7 +554,26 @@ export default function App() {
 
   const handleLogout = () => { localStorage.removeItem('astro_token'); setHasStarted(false); setUserState({ dailyQuestionsLeft: INITIAL_DAILY_LIMIT, isPremium: false, tier: 'free', name: '', gender: '', contact: '', hasOnboarded: false, birthDate: '', birthTime: '', birthPlace: '', language: 'en' }); setMessages([]); setView(AppView.CHAT); };
   const handleLanguageChange = (lang: Language) => { setUserState(prev => ({ ...prev, language: lang })); setHoroscopeData(undefined); };
-  const verifyUserCredentials = async (c: string, p: string) => { const { profile } = await fetchUserProfile([c, c.trim()]); return profile && profile.password ? await verifyPassword(p, profile.password) : false; };
+  
+  // FIXED: Expanded credential verification to try common phone formats
+  const verifyUserCredentials = async (c: string, p: string): Promise<boolean | string> => { 
+      const variations = [c, c.trim()];
+      // If input is purely digits, try adding common country codes
+      if (/^\d+$/.test(c.trim())) {
+          variations.push(`+91${c.trim()}`); 
+          variations.push(`+1${c.trim()}`); 
+          variations.push(`+44${c.trim()}`);
+      }
+      
+      const { profile } = await fetchUserProfile(variations);
+      
+      if (profile && profile.password) {
+          const isMatch = await verifyPassword(p, profile.password);
+          if (isMatch) return profile.contact; // Return the correct contact string
+      }
+      return false; 
+  };
+
   const initiatePayment = (amount: number, desc: string, success: () => void, contact?: string) => { setPendingPayment({ amount, description: desc, onSuccess: success, contact }); setShowPaymentConfirmation(true); };
   const updateEarnings = (id: string, type: keyof Earnings, amt: number) => setAstrologerEarnings(p => ({...p, [id]: {...(p[id]||{chats:0,products:0,tips:0,withdrawn:0}), [type]: (p[id]?.[type]||0)+amt}}));
   

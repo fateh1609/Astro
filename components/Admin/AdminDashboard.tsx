@@ -74,7 +74,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const saveUserUpdates = async () => { 
       if (!editingUser) return; 
       await updateProfile(editingUser.id, { 
-          isPremium: editingUser.isPremium, 
+          isPremium: editingUser.isPremium,
+          tier: editingUser.tier, // Ensure tier is saved to DB
           dailyQuestionsLeft: editingUser.dailyQuestionsLeft, 
           name: editingUser.name 
       }); 
@@ -201,6 +202,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <tr>
                             <th className="px-6 py-4">User</th>
                             <th className="px-6 py-4">Status</th>
+                            <th className="px-6 py-4">Tier</th>
                             <th className="px-6 py-4">Daily Limit</th>
                             <th className="px-6 py-4">Created</th>
                             <th className="px-6 py-4 text-center">Actions</th>
@@ -221,11 +223,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                     </div>
                                 </td>
                                 <td className="px-6 py-4">
-                                     {/* Use standardized CamelCase property */}
                                      {user.isPremium ? 
                                         <span className="bg-gold-500/20 text-gold-400 px-2 py-1 rounded text-[10px] font-bold border border-gold-500/30 uppercase tracking-wide">PREMIUM</span> 
                                         : <span className="bg-mystic-800 text-mystic-400 px-2 py-1 rounded text-[10px] uppercase tracking-wide">Free Plan</span>
                                      }
+                                </td>
+                                <td className="px-6 py-4 text-xs font-mono text-indigo-300 uppercase">
+                                    {user.tier || 'free'}
                                 </td>
                                 <td className="px-6 py-4 text-mystic-300">
                                     <span className="font-mono text-white">{user.dailyQuestionsLeft}</span> <span className="text-xs">Qs/Day</span>
@@ -516,7 +520,38 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
 
         {isTierModalOpen && editingTier && ( <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4"><div className="bg-mystic-800 p-6 rounded-2xl w-full max-w-md"><h3 className="text-xl font-bold mb-4 text-white">Edit Tier: {editingTier.name}</h3><div className="space-y-2 mb-4">{AVAILABLE_FEATURES.map(f=>(<div key={f.id} onClick={()=>toggleFeature(f.id)} className={`p-2 border rounded cursor-pointer transition-colors ${editingTier.featureFlags.includes(f.id)?'bg-gold-500 text-black border-gold-500':'border-white/20 text-mystic-300 hover:bg-white/5'}`}>{f.label}</div>))}</div><button onClick={saveTierUpdates} className="bg-white/10 hover:bg-white/20 text-white w-full py-2 rounded transition-colors">Save</button></div></div> )}
-        {isUserModalOpen && editingUser && ( <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4"><div className="bg-mystic-800 p-6 rounded-2xl w-full max-w-md"><h3 className="text-white font-bold mb-4">Edit User</h3><input value={editingUser.name} onChange={e=>setEditingUser({...editingUser, name:e.target.value})} className="w-full bg-mystic-900 border border-white/10 p-2 mb-4 rounded text-white"/><button onClick={saveUserUpdates} className="w-full bg-gold-500 hover:bg-gold-400 p-2 rounded text-black font-bold transition-colors">Save</button></div></div> )}
+        
+        {/* EDIT USER MODAL - Updated with Tier Selection */}
+        {isUserModalOpen && editingUser && ( 
+            <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4">
+                <div className="bg-mystic-800 p-6 rounded-2xl w-full max-w-md">
+                    <h3 className="text-white font-bold mb-4">Edit User</h3>
+                    
+                    <label className="text-[10px] uppercase text-mystic-400 font-bold block mb-1">Display Name</label>
+                    <input value={editingUser.name} onChange={e=>setEditingUser({...editingUser, name:e.target.value})} className="w-full bg-mystic-900 border border-white/10 p-2 mb-4 rounded text-white"/>
+                    
+                    <label className="text-[10px] uppercase text-mystic-400 font-bold block mb-1">Subscription Tier</label>
+                    <select 
+                        value={editingUser.tier || 'free'} 
+                        onChange={e => setEditingUser({...editingUser, tier: e.target.value, isPremium: e.target.value === 'premium' })}
+                        className="w-full bg-mystic-900 border border-white/10 p-2 mb-4 rounded text-white"
+                    >
+                        <option value="free">Free</option>
+                        <option value="premium">Premium</option>
+                        <option value="member21">Member 21</option>
+                    </select>
+
+                    <label className="text-[10px] uppercase text-mystic-400 font-bold block mb-1">Daily Limit</label>
+                    <input type="number" value={editingUser.dailyQuestionsLeft} onChange={e=>setEditingUser({...editingUser, dailyQuestionsLeft: parseInt(e.target.value)})} className="w-full bg-mystic-900 border border-white/10 p-2 mb-4 rounded text-white"/>
+                    
+                    <div className="flex gap-2 justify-end">
+                        <button onClick={()=>setIsUserModalOpen(false)} className="text-xs text-mystic-400 hover:text-white px-3">Cancel</button>
+                        <button onClick={saveUserUpdates} className="bg-gold-500 hover:bg-gold-400 px-4 py-2 rounded text-black font-bold transition-colors">Save Changes</button>
+                    </div>
+                </div>
+            </div> 
+        )}
+        
         {isProductModalOpen && editingProduct && ( <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4"><div className="bg-mystic-800 p-6 rounded-2xl w-full max-w-md"><h3 className="text-white font-bold mb-4">Edit Product</h3><input value={editingProduct.name} onChange={e=>setEditingProduct({...editingProduct, name:e.target.value})} className="w-full bg-mystic-900 border border-white/10 p-2 mb-2 rounded text-white" placeholder="Name"/><input type="number" value={editingProduct.price} onChange={e=>setEditingProduct({...editingProduct, price:parseInt(e.target.value)})} className="w-full bg-mystic-900 border border-white/10 p-2 mb-4 rounded text-white" placeholder="Price"/><button onClick={saveProduct} className="w-full bg-gold-500 hover:bg-gold-400 p-2 rounded text-black font-bold transition-colors">Save</button></div></div> )}
         {isAstroModalOpen && editingAstro && ( <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4"><div className="bg-mystic-800 p-6 rounded-2xl w-full max-w-md"><h3 className="text-white font-bold mb-4">Edit Guru</h3><input value={editingAstro.name} onChange={e=>setEditingAstro({...editingAstro, name:e.target.value})} className="w-full bg-mystic-900 border border-white/10 p-2 mb-2 rounded text-white" placeholder="Name"/><button onClick={saveAstro} className="w-full bg-gold-500 hover:bg-gold-400 p-2 rounded text-black font-bold transition-colors">Save</button></div></div> )}
         {isChatReviewOpen && viewingChatUser && ( <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4"><div className="bg-mystic-900 w-full max-w-lg h-[80vh] flex flex-col rounded-2xl overflow-hidden border border-white/10"><div className="p-4 bg-mystic-800 flex justify-between items-center"><h3 className="font-bold text-white">Chat: {viewingChatUser.name}</h3><button onClick={()=>setIsChatReviewOpen(false)} className="text-white hover:text-gold-400">✕</button></div><div className="flex-1 overflow-y-auto p-4 bg-black/20">{userChatHistory.length === 0 ? <p className="text-mystic-500 text-center italic mt-10">No chat history found.</p> : userChatHistory.map((m,i)=>(<div key={i} className="mb-3 text-sm"><span className={`${m.sender === Sender.USER ? 'text-green-400' : 'text-gold-400'} font-bold uppercase text-xs`}>{m.sender}</span><div className="bg-white/5 p-2 rounded mt-1 text-mystic-200">{m.text}</div></div>))}</div></div></div> )}

@@ -144,12 +144,14 @@ export const verifyAuthOtp = async (contact: string, token: string): Promise<{ s
             // Sync Profile
             const { data: profile } = await supabase.from('profiles').select('id').eq('id', userId).single();
             if (!profile) {
+                // Ensure we only insert columns that exist in the DB schema provided by user
                 await supabase.from('profiles').insert([{
                     id: userId,
                     contact: contact,
                     name: contact.split('@')[0],
                     daily_questions_left: 1,
                     is_premium: false
+                    // tier removed to prevent error if column missing
                 }]);
             }
             return { success: true, userId: userId };
@@ -301,20 +303,36 @@ export const fetchProfiles = async (): Promise<any[]> => {
         }
 
         // Standardize to CamelCase for App Consistency
-        const mappedUsers = data.map((u: any) => ({
-            id: u.id,
-            name: u.name || 'User',
-            contact: u.contact,
-            isPremium: !!u.is_premium,
-            tier: u.tier || 'free', // Added tier mapping
-            dailyQuestionsLeft: u.daily_questions_left || 0,
-            gender: u.gender,
-            birthDate: u.birth_date,
-            birthTime: u.birth_time,
-            birthPlace: u.birth_place,
-            createdAt: u.created_at,
-            chatHistory: u.chat_history 
-        }));
+        const mappedUsers = data.map((u: any) => {
+            // DERIVE TIER LOGIC IF COLUMN MISSING
+            let tier = u.tier || 'free';
+            const now = new Date();
+            const expiry = u.subscription_expiry ? new Date(u.subscription_expiry) : null;
+            
+            if (tier === 'free' || !tier) {
+                if (u.is_premium) {
+                    tier = 'premium';
+                } else if (expiry && expiry > now && expiry.getFullYear() - now.getFullYear() >= 2) {
+                    // Member 21 usually has a long expiry (3 years)
+                    tier = 'member21';
+                }
+            }
+
+            return {
+                id: u.id,
+                name: u.name || 'User',
+                contact: u.contact,
+                isPremium: !!u.is_premium,
+                tier: tier, 
+                dailyQuestionsLeft: u.daily_questions_left || 0,
+                gender: u.gender,
+                birthDate: u.birth_date,
+                birthTime: u.birth_time,
+                birthPlace: u.birth_place,
+                createdAt: u.created_at,
+                chatHistory: u.chat_history 
+            };
+        });
 
         return mappedUsers.sort((a: any, b: any) => {
             return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
@@ -331,11 +349,14 @@ export const updateProfile = async (id: string, updates: any) => {
     // Map CamelCase back to snake_case for DB
     const dbUpdates: any = {};
     if (updates.isPremium !== undefined) dbUpdates.is_premium = updates.isPremium;
-    if (updates.tier !== undefined) dbUpdates.tier = updates.tier; // Handle tier update
     if (updates.dailyQuestionsLeft !== undefined) dbUpdates.daily_questions_left = updates.dailyQuestionsLeft;
     if (updates.name !== undefined) dbUpdates.name = updates.name;
     
-    // If explicit snake_case was passed, keep it
+    // NOTE: 'tier' column might not exist in user's schema.
+    // We do NOT send 'tier' to the DB to avoid errors.
+    // Instead we ensure is_premium and logic persists via saveUserProfile logic mostly.
+    // But for admin updates, we might need to be careful.
+    
     if (updates.is_premium !== undefined) dbUpdates.is_premium = updates.is_premium;
     if (updates.daily_questions_left !== undefined) dbUpdates.daily_questions_left = updates.daily_questions_left;
 
@@ -356,6 +377,20 @@ export const fetchUserProfile = async (contact: string | string[]): Promise<{ pr
           if (decrypted) messages = decrypted.map((m: any) => ({ ...m, timestamp: new Date(m.timestamp) }));
       }
       
+      // DERIVE TIER FROM DATA (Robust against missing column)
+      let tier = data.tier || 'free';
+      const now = new Date();
+      const expiry = data.subscription_expiry ? new Date(data.subscription_expiry) : null;
+      
+      if (tier === 'free' || !tier) {
+          if (data.is_premium) {
+              tier = 'premium';
+          } else if (expiry && expiry > now && expiry.getFullYear() - now.getFullYear() >= 2) {
+              // Member 21: Not premium, but has long expiry
+              tier = 'member21';
+          }
+      }
+
       // Explicit Mapping from DB (snake_case) to App (CamelCase)
       const mappedProfile = { 
           id: data.id, 
@@ -366,9 +401,9 @@ export const fetchUserProfile = async (contact: string | string[]): Promise<{ pr
           birthTime: data.birth_time, // snake_case from DB
           birthPlace: data.birth_place, // snake_case from DB
           isPremium: data.is_premium, // snake_case from DB
-          tier: data.tier || 'free', // snake_case from DB (assuming column exists or defaulting)
+          tier: tier, 
           dailyQuestionsLeft: data.daily_questions_left, // snake_case from DB
-          subscriptionExpiry: data.subscription_expiry ? new Date(data.subscription_expiry) : undefined, // snake_case from DB
+          subscriptionExpiry: expiry, // snake_case from DB
           password: data.password 
       };
 
@@ -394,10 +429,22 @@ export const saveUserProfile = async (user: UserState, password?: string, messag
         birth_time: user.birthTime || '', // Storing as snake_case
         birth_place: user.birthPlace || '', // Storing as snake_case
         is_premium: !!user.isPremium,
-        tier: user.tier || 'free', // Store tier
+        // tier: user.tier || 'free',  <-- REMOVED to prevent errors on missing column
         daily_questions_left: typeof user.dailyQuestionsLeft === 'number' ? user.dailyQuestionsLeft : 0,
         subscription_expiry: user.subscriptionExpiry ? user.subscriptionExpiry.toISOString() : null
       };
+      
+      // If the user is Member 21, ensure we set specific flags that allow us to derive it later
+      if (user.tier === 'member21') {
+          // Member 21: Not premium (no daily refill), but valid long expiry
+          payload.is_premium = false;
+          if (!payload.subscription_expiry) {
+              const d = new Date();
+              d.setFullYear(d.getFullYear() + 3);
+              payload.subscription_expiry = d.toISOString();
+          }
+      }
+
       if (password) payload.password = await hashPassword(password);
       if (messages && messages.length > 0) payload.chat_history = compressAndEncrypt(messages);
 

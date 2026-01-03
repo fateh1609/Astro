@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import StarBackground from './StarBackground';
 import { sendAuthOtp, verifyAuthOtp, resetUserPassword } from '../../services/dbService';
@@ -5,7 +6,7 @@ import { sendAuthOtp, verifyAuthOtp, resetUserPassword } from '../../services/db
 interface LandingPageProps {
   onSeekerEnter: () => void;
   onSeekerLogin: (verifiedContact: string) => void;
-  onVerifyCredentials: (contact: string, password: string) => Promise<boolean>;
+  onVerifyCredentials: (contact: string, password: string) => Promise<boolean | string>;
   onGuruEnter: () => void;
   onAdminEnter: () => void;
 }
@@ -58,20 +59,28 @@ const LandingPage: React.FC<LandingPageProps> = ({ onSeekerEnter, onSeekerLogin,
 
     setIsLoading(true);
     try {
-        const isValid = await onVerifyCredentials(phoneNumber, password);
+        const result = await onVerifyCredentials(phoneNumber, password);
         
-        if (isValid) {
-            // Password Correct, Now Send OTP
-            const result = await sendAuthOtp(phoneNumber);
+        if (result) {
+            // If result is string, it's the corrected phone number (with country code)
+            const targetContact = typeof result === 'string' ? result : phoneNumber;
             
-            if (result.success) {
+            // Update state to use corrected contact for OTP
+            if (typeof result === 'string') {
+                setPhoneNumber(targetContact);
+            }
+
+            // Password Correct, Now Send OTP to the correct contact
+            const otpResult = await sendAuthOtp(targetContact);
+            
+            if (otpResult.success) {
                 setLoginStep('otp');
-            } else if (result.isRateLimit) {
+            } else if (otpResult.isRateLimit) {
                 // Gracefully handle rate limit: advance flow assuming code was sent or user has old one
                 console.warn("Rate limit hit, advancing flow anyway.");
                 setLoginStep('otp');
             } else {
-                setErrorMsg(result.message || "Failed to send OTP.");
+                setErrorMsg(otpResult.message || "Failed to send OTP.");
             }
         } else {
             setErrorMsg("Incorrect Phone/Email or Password.");
